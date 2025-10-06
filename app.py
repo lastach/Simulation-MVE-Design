@@ -1,323 +1,294 @@
-# Startup Simulation #2 — Assumptions → Experiments → Learning (Streamlit)
+# Startup Simulation #2 — Assumptions → Experiments → Learning (Streamlit, no tabs)
 # -----------------------------------------------------------------------
-# Run locally:  streamlit run app_sim2.py
+# Run: streamlit run app_sim2.py
 # Deploy on Streamlit Cloud with main file path = app_sim2.py
 # -----------------------------------------------------------------------
 
 import random
 from copy import deepcopy
 import streamlit as st
-import streamlit.components.v1 as components
 
 random.seed(17)
-
 st.set_page_config(page_title="Simulation #2: Assumptions → Experiments", page_icon="🧪", layout="wide")
+
 TITLE = "Startup Simulation #2 — Assumptions → Experiments → Learning"
 
-# -------------------------- Seed idea & ground truth (hidden) --------------------------
+# -------------------------- Seed idea & ground truth --------------------------
 SEED_IDEA = {
     "name": "Stabilize Class Occupancy for Independent Gyms",
     "sketch": (
         "You are exploring a service that helps independent gyms keep classes consistently full. "
-        "The idea is to watch demand signals (bookings, cancellations, weather, local events) and "
-        "suggest quick fill tactics (swap members, send timely offers, leverage partner referrals). "
-        "Pricing under consideration: a monthly subscription in the $79–$149 range."
+        "The approach: monitor signals (bookings, cancellations, weather, local events) and suggest quick fill tactics "
+        "(member swaps, timely offers, partner referrals). The pricing under consideration is a monthly subscription "
+        "in the $79–$149 range."
     )
 }
 
-# Hidden “truth” map (guides noisy outcomes). Each bucket has a top risk emphasis.
-GROUND_TRUTH = {
-    "desirability": {"willing_to_pay": 0.6, "real_problem": 0.9, "findability": 0.5},
-    "feasibility":  {"ops_capacity": 0.7, "tooling_speed": 0.5, "data_access": 0.8},
-    "viability":    {"unit_economics": 0.8, "churn_risk": 0.7, "scalability": 0.9},
-    "top": {"desirability":"real_problem", "feasibility":"data_access", "viability":"scalability"}
-}
+# We remove the D/F/V lens. Instead we model hidden risk by assumption THEME.
+THEMES = [
+    "Demand", "Willingness to Pay", "Acquisition", "Delivery Capacity", "Data Access",
+    "Automation", "Churn", "Margin", "Scale", "Partners", "Time-to-Value", "Switching Cost"
+]
+
+# Curated assumption candidates (12). Each has a hidden risk (0..1) and theme.
+ASSUMPTION_CATALOG = [
+    {"text":"At least 15% of targeted visitors will join a waitlist in one week.", "theme":"Demand", "risk":0.85},
+    {"text":"10% of contacted gym owners will pre-order at $99/mo.", "theme":"Willingness to Pay", "risk":0.80},
+    {"text":"We can acquire qualified owners for <$25 each with simple ads.", "theme":"Acquisition", "risk":0.55},
+    {"text":"We can act on demand signals fast enough to fill mid-week gaps.", "theme":"Delivery Capacity", "risk":0.70},
+    {"text":"We can get the booking + cancellations data we need from most gyms.", "theme":"Data Access", "risk":0.90},
+    {"text":"≥70% of fill suggestions can be executed without human intervention.", "theme":"Automation", "risk":0.75},
+    {"text":"If value is delivered, monthly churn will be ≤5%.", "theme":"Churn", "risk":0.65},
+    {"text":"Gross margin will be ≥60% at $99/mo with <4 hours/week of ops.", "theme":"Margin", "risk":0.75},
+    {"text":"The approach still works for 200+ gyms without response delays.", "theme":"Scale", "risk":0.90},
+    {"text":"Local studios will agree to cross-promote each other’s empty spots.", "theme":"Partners", "risk":0.60},
+    {"text":"New gyms will see clear value within 14 days of signup.", "theme":"Time-to-Value", "risk":0.70},
+    {"text":"Studios can adopt the service without process disruption.", "theme":"Switching Cost", "risk":0.55},
+]
+
+# Hidden “top risks” (inform scoring)
+TOP_RISKS = sorted(ASSUMPTION_CATALOG, key=lambda a: a["risk"], reverse=True)[:3]  # 3 highest risk items
 
 # -------------------------- Experiment catalog --------------------------
 EXPERIMENTS = [
     {"key":"landing_page","name":"Landing page / smoke test","cost":2,"speed":"days",
-     "gain":{"desirability":0.6,"feasibility":0.0,"viability":0.2},
+     "gain":{"Demand":0.7,"Willingness to Pay":0.3,"Acquisition":0.3},
      "desc":"Drive targeted traffic to a simple value proposition and measure conversions.",
      "bench":"CTR yardsticks: <2% weak • 2–5% fair • 5–8% promising • >8% strong"},
     {"key":"concierge_mvp","name":"Concierge MVP","cost":3,"speed":"days",
-     "gain":{"desirability":0.4,"feasibility":0.5,"viability":0.2},
+     "gain":{"Delivery Capacity":0.6,"Time-to-Value":0.4,"Churn":0.3},
      "desc":"Manually deliver the outcome for a handful of customers to test behavior.",
      "bench":"Repurchase yardsticks: 0–1 weak • 2–3 fair • 4+ strong (out of 6–8 trials)"},
     {"key":"wizard_of_oz","name":"Wizard-of-Oz prototype","cost":3,"speed":"days",
-     "gain":{"desirability":0.2,"feasibility":0.6,"viability":0.1},
+     "gain":{"Automation":0.6,"Delivery Capacity":0.4},
      "desc":"UI appears automated; human performs the backend steps to prove flow.",
      "bench":"Automation yardsticks: <50% tasks automated weak • 50–70% fair • >70% strong"},
     {"key":"preorder","name":"Pre-order / crowdfunding","cost":4,"speed":"weeks",
-     "gain":{"desirability":0.8,"feasibility":0.0,"viability":0.3},
+     "gain":{"Willingness to Pay":0.8,"Demand":0.4},
      "desc":"Collect real purchase intent before full build.",
      "bench":"Buy rate yardsticks: <5% weak • 5–12% fair • >12% strong (from warm leads)"},
     {"key":"expert_interview","name":"Expert interview","cost":1,"speed":"days",
-     "gain":{"desirability":0.2,"feasibility":0.2,"viability":0.2},
-     "desc":"Pressure-test plan with seasoned operators.",
+     "gain":{"Data Access":0.4,"Scale":0.3,"Margin":0.3},
+     "desc":"Pressure-test plan with seasoned operators (data sources, costs, risks).",
      "bench":"Use to refine assumptions; not a pass/fail signal alone."},
     {"key":"benchmark","name":"Benchmark vs. workaround","cost":2,"speed":"days",
-     "gain":{"desirability":0.3,"feasibility":0.2,"viability":0.3},
-     "desc":"Compare against current hacks (e.g., spreadsheets, manual outreach).",
+     "gain":{"Time-to-Value":0.4,"Switching Cost":0.5,"Margin":0.3},
+     "desc":"Compare against current hacks (spreadsheets, manual outreach).",
      "bench":"Win count out of 10 criteria: <5 weak • 5–7 fair • 8+ strong"},
     {"key":"ad_split","name":"Ad split test","cost":3,"speed":"days",
-     "gain":{"desirability":0.5,"feasibility":0.0,"viability":0.2},
+     "gain":{"Demand":0.6,"Acquisition":0.4},
      "desc":"Test two messages to see which resonates with the same audience.",
      "bench":"CTR gap yardsticks: <0.5pp weak • 0.5–1.5pp fair • >1.5pp strong"},
     {"key":"diary_study","name":"Diary study / usage log","cost":2,"speed":"weeks",
-     "gain":{"desirability":0.3,"feasibility":0.3,"viability":0.1},
+     "gain":{"Demand":0.3,"Time-to-Value":0.3,"Churn":0.3},
      "desc":"Have target users log pain occurrences for 1–2 weeks.",
-     "bench":"Frequent, repeated pain across entries is a strong signal"}
+     "bench":"Frequent, repeated pain across entries is a strong signal"},
+    {"key":"partner_probe","name":"Partner probe","cost":1,"speed":"days",
+     "gain":{"Partners":0.6,"Acquisition":0.3},
+     "desc":"Quick outreach to gauge willingness of local studios to cross-promote.",
+     "bench":"Positive replies yardsticks: <2 weak • 2–4 fair • 5+ strong (out of ~10 warm pings)"}
 ]
 
-# -------------------------- Helpers --------------------------
-def push_tab(idx: int):
-    # Clicks the tab button (0-based) twice for reliability
-    components.html(
-        f"<script>const t=window.parent.document.querySelectorAll('button[role=tab]');"
-        f"if(t[{idx}]){{t[{idx}].click(); setTimeout(()=>t[{idx}].click(),90);}}</script>", height=0
-    )
-
+# -------------------------- State --------------------------
 def init_state():
     st.session_state.s2 = {
-        "stage": "intro",                 # intro -> slots -> round1 -> results1 -> round2 -> results2 -> (round3?) -> score
-        "tokens": 8,                      # total per round (round1=8, round2=6, round3=4)
-        "round": 1,
+        "stage": "intro",           # intro -> pick -> round1 -> results1 -> round2 -> results2 -> round3 -> score
         "idea": deepcopy(SEED_IDEA),
-        "assumptions": [],                # list[{text, bucket, quality}]
-        "assumption_slots": 8,
-        "portfolio": {1:[],2:[],3:[]},    # chosen experiments per round: list[{exp_key, assumption_idx}]
-        "results": {1:[],2:[],3:[]},      # results per round
-        "learned_risk": {"desirability":0.0,"feasibility":0.0,"viability":0.0},
+        "chosen": [],               # list of chosen assumptions
+        "round": 1,
+        "tokens": 8,                # round1=8, round2=6, round3=4
+        "portfolio": {1:[],2:[],3:[]},     # selected experiments [{assumption_idx, exp_key}]
+        "results": {1:[],2:[],3:[]},       # results per round
+        "learning": {},             # per theme cumulative learning 0..1
         "score": None
     }
 
-def bucket_color(b):
-    return {"desirability":"🧡", "feasibility":"💙", "viability":"💚"}[b]
+def theme_gain(exp_key, theme):
+    exp = next(e for e in EXPERIMENTS if e["key"]==exp_key)
+    return exp["gain"].get(theme, 0.0)
 
-def assumption_quality(text):
-    """Simple proxy for specificity: looks for measurable cues and length."""
-    t = (text or "").lower()
-    cues = sum(x in t for x in [
-        "%","$"," per "," click "," signup"," week"," month"," waitlist"," pay"," again"," cohort"," threshold"
-    ])
+def assumption_quality_from_text(txt:str)->float:
+    t = txt.lower()
+    cues = sum(x in t for x in ["%","$"," per "," within "," days"," week"," month"," buy"," pre-order"," waitlist"])
     length = len(t.split())
     return max(0.2, min(1.0, 0.2 + 0.1*cues + 0.02*min(length, 30)))
 
-def experiment_by_key(k):
-    return next(e for e in EXPERIMENTS if e["key"]==k)
+def synth_result(exp_key, assumption):
+    """Semi-random snippet biased by exp->theme gain and the assumption's hidden risk; produce interpretation."""
+    exp = next(e for e in EXPERIMENTS if e["key"]==exp_key)
+    theme = assumption["theme"]
+    base = exp["gain"].get(theme, 0.0)
+    # If theme is among top hidden risks, slightly stronger noise-weight
+    top_themes = {a["theme"] for a in TOP_RISKS}
+    steer = 1.15 if theme in top_themes else 1.0
+    quality = assumption_quality_from_text(assumption["text"])
+    signal = base * (0.6 + 0.4*quality) * steer
 
-def interp_band(val, bands):
-    """Return a text verdict from (val,bands) like [(2,'weak'),(5,'fair'),...] thresholds in absolute units."""
-    for thr, label in bands:
-        if val < thr: return label
-    return bands[-1][1]
-
-def synth_result(exp, bucket, a_quality):
-    """Generate a semi-random snippet biased by ground truth & assumption quality; add interpretation."""
-    steer = 1.15 if GROUND_TRUTH["top"][bucket] in ("real_problem","data_access","scalability") else 1.0
-    base = exp["gain"].get(bucket, 0.0)
-    signal = base * a_quality * steer
-
-    # Variant texts for the ad split to make it actionable
-    headline_A = "Keep your mid-week classes full with timely fills"
-    headline_B = "Reduce empty spots and stabilize revenue each week"
-
-    if exp["key"]=="landing_page":
+    if exp_key=="landing_page":
         imps = random.randint(320, 900)
-        ctr = max(0.5, min(14.0, 2.0 + 12.0*signal + random.uniform(-1.5,1.5)))  # %
+        ctr = max(0.5, min(14.0, 2.0 + 11.0*signal + random.uniform(-1.2,1.2)))
         verdict = "weak" if ctr<2 else ("fair" if ctr<5 else ("promising" if ctr<8 else "strong"))
-        snippet = (f"Landing page: {imps} impressions → CTR **{ctr:.1f}%** "
-                   f"(waitlist signups ≈ **{int(imps*ctr/100*0.6)}**). "
-                   f"**Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Landing page: {imps} impressions → CTR **{ctr:.1f}%** "
+                f"(est. waitlist signups ≈ **{int(imps*ctr/100*0.6)}**). "
+                f"**Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="ad_split":
-        a = max(0.4, min(10.0, 1.3 + 9.0*signal + random.uniform(-1.0,1.0)))
+    if exp_key=="ad_split":
+        headline_A = "Keep mid-week classes full with timely fills"
+        headline_B = "Reduce empty spots and stabilize weekly revenue"
+        a = max(0.4, min(10.0, 1.2 + 8.5*signal + random.uniform(-1.0,1.0)))
         b = max(0.3, min(9.0, 0.9 + 8.0*(signal-0.08) + random.uniform(-1.0,1.0)))
-        diff = abs(a-b)
-        winner = "A" if a>b else "B"
-        msgA = f"Headline A: “{headline_A}” → CTR **{a:.1f}%**"
-        msgB = f"Headline B: “{headline_B}” → CTR **{b:.1f}%**"
+        diff = abs(a-b); win = "A" if a>b else "B"
         verdict = "weak" if diff<0.5 else ("fair" if diff<1.5 else "strong")
-        snippet = (f"Ad split test:\n- {msgA}\n- {msgB}\n"
-                   f"Winner: **{winner}** (gap {diff:.1f}pp). "
-                   f"**Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Ad split:\n- A “{headline_A}” → **{a:.1f}%**\n- B “{headline_B}” → **{b:.1f}%**\n"
+                f"Winner: **{win}** (gap {diff:.1f}pp). **Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="preorder":
+    if exp_key=="preorder":
         leads = random.randint(10, 30)
-        conv = max(0.0, min(0.35, 0.06 + 0.4*signal + random.uniform(-0.05,0.05)))
+        conv = max(0.0, min(0.35, 0.05 + 0.38*signal + random.uniform(-0.05,0.05)))
         buys = max(0, int(leads*conv))
         verdict = "weak" if conv<0.05 else ("fair" if conv<0.12 else "strong")
-        snippet = (f"Pre-order: {leads} leads → **{buys}** confirmed cards "
-                   f"({conv*100:.1f}% buy). **Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Pre-order: {leads} leads → **{buys}** confirmed cards "
+                f"({conv*100:.1f}% buy). **Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="concierge_mvp":
+    if exp_key=="concierge_mvp":
         trials = random.randint(6, 8)
-        repurchase = max(0, int(trials*(0.18 + 0.62*signal + random.uniform(-0.1,0.1))))
+        repurchase = max(0, int(trials*(0.18 + 0.60*signal + random.uniform(-0.1,0.1))))
         verdict = "weak" if repurchase<=1 else ("fair" if repurchase<=3 else "strong")
-        snippet = (f"Concierge trial: {trials} customers → **{repurchase}** would pay again. "
-                   f"**Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Concierge trial: {trials} customers → **{repurchase}** would pay again. "
+                f"**Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="wizard_of_oz":
+    if exp_key=="wizard_of_oz":
         tasks = random.randint(18, 32)
-        auto = int(tasks*(0.5 + 0.4*signal + random.uniform(-0.1,0.1)))
+        auto = int(tasks*(0.48 + 0.45*signal + random.uniform(-0.1,0.1)))
         pct = 100*auto/max(tasks,1)
         verdict = "weak" if pct<50 else ("fair" if pct<70 else "strong")
-        snippet = (f"Wizard-of-Oz: automated **{auto}/{tasks}** tasks (**{pct:.0f}%**). "
-                   f"**Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Wizard-of-Oz: automated **{auto}/{tasks}** tasks (**{pct:.0f}%**). "
+                f"**Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="expert_interview":
+    if exp_key=="expert_interview":
         insights = 2 + int(4*signal + random.uniform(0,2))
-        snippet = (f"Expert interview: **{insights}** specific takeaways; "
-                   f"flagged risk emphasis → **{GROUND_TRUTH['top']['viability']}**. "
-                   f"**Interpretation:** directional; use to refine next tests. {exp['bench']}")
-        return snippet, signal*0.6
+        return (f"Expert interview: **{insights}** actionable takeaways. "
+                f"**Interpretation:** directional; refine assumptions. {exp['bench']}"), signal*0.6
 
-    if exp["key"]=="benchmark":
+    if exp_key=="benchmark":
         win = max(3, int(10*signal + random.uniform(-1,2)))
         verdict = "weak" if win<5 else ("fair" if win<8 else "strong")
-        snippet = (f"Benchmark vs workaround: won **{win}/10** criteria. "
-                   f"**Interpretation:** {verdict}. {exp['bench']}")
-        return snippet, signal
+        return (f"Benchmark vs workaround: won **{win}/10** criteria. "
+                f"**Interpretation:** {verdict}. {exp['bench']}"), signal
 
-    if exp["key"]=="diary_study":
+    if exp_key=="diary_study":
         entries = 6 + int(5*signal + random.uniform(0,3))
-        snippet = (f"Diary study: **{entries}** entries. Repeated pain noted: "
-                   f"“inconsistent mid-week demand”. **Interpretation:** recurring pain is a strong signal.")
-        return snippet, signal*0.7
+        return (f"Diary study: **{entries}** entries. Repeated pain: "
+                f"“inconsistent mid-week demand”. **Interpretation:** recurring pain is strong evidence."), signal*0.7
+
+    if exp_key=="partner_probe":
+        replies = max(0, int(10*(0.15 + 0.6*signal + random.uniform(-0.1,0.1))))
+        verdict = "weak" if replies<2 else ("fair" if replies<5 else "strong")
+        return (f"Partner probe: **{replies}/10** positive replies to cross-promote. "
+                f"**Interpretation:** {verdict}. {exp['bench']}"), signal
 
     return "Result pending", signal
 
-def add_learning(signal, bucket):
-    st.session_state.s2["learned_risk"][bucket] = min(
-        1.0, st.session_state.s2["learned_risk"][bucket] + 0.6*signal
-    )
+def add_learning(theme, signal):
+    S = st.session_state.s2
+    cur = S["learning"].get(theme, 0.0)
+    S["learning"][theme] = min(1.0, cur + 0.6*signal)
 
+# -------------------------- Scoring --------------------------
 def compute_score():
     S = st.session_state.s2
-    q = [a["quality"] for a in S["assumptions"]]
-    aq = (sum(q)/len(q)) if q else 0.0
+    # Prioritization: how many of the true top risks were included in Round 1 picks?
+    round1_themes = [S["chosen"][it["assumption_idx"]]["theme"] for it in S["portfolio"][1]]
+    top_themes = {a["theme"] for a in TOP_RISKS}
+    hits = len([t for t in round1_themes if t in top_themes])
+    prioritization = hits / min(3, len(S["portfolio"][1]) or 1)
 
-    rp = 0.0
-    if S["results"][1]:
-        hits = 0
-        for b in ["desirability","feasibility","viability"]:
-            top = GROUND_TRUTH["top"][b]
-            if any(r["assumption"]["bucket"]==b and top in r["assumption"]["text"].lower() for r in S["results"][1]):
-                hits += 1
-        rp = hits/3.0
-
+    # Experiment Fit: avg exp gain for that assumption's theme
     fits = []
     for rnd in [1,2,3]:
-        for r in S["results"][rnd]:
-            exp = experiment_by_key(r["exp_key"])
-            fits.append(exp["gain"].get(r["assumption"]["bucket"],0.0))
-    ef = (sum(fits)/len(fits)) if fits else 0.0
+        for it in S["portfolio"][rnd]:
+            a = S["chosen"][it["assumption_idx"]]
+            fits.append(theme_gain(it["exp_key"], a["theme"]))
+    exp_fit = (sum(fits)/len(fits)) if fits else 0.0
 
-    c_rounds = []
-    for rnd in [1,2,3]:
-        cost = sum(experiment_by_key(x["exp_key"])["cost"] for x in S["portfolio"][rnd])
-        if cost>0: c_rounds.append(cost)
-    re = 1.0
-    if c_rounds:
-        re -= 0.15*max(0, (c_rounds[0]-6)/3)  # penalize heavy spend in round 1
-        if len(c_rounds)>=2 and c_rounds[1]==0:
-            re -= 0.2                      # no iteration
-    re = max(0.0, min(1.0, re))
+    # Resource Efficiency: start low-cost and leave tokens for iteration
+    costs = [sum(next(e for e in EXPERIMENTS if e["key"]==it["exp_key"])["cost"]
+                 for it in S["portfolio"][rnd]) for rnd in [1,2,3]]
+    resource = 1.0
+    if costs and costs[0] > 6:
+        resource -= 0.2
+    if len(S["portfolio"][2]) == 0:
+        resource -= 0.2
+    resource = max(0.0, resource)
 
-    lo = sum(1 for b in ["desirability","feasibility","viability"] if S["learned_risk"][b]>0.55) / 3.0
+    # Learning Outcome: how many distinct themes reached decent learning?
+    learned = sum(1 for v in S["learning"].values() if v > 0.55)
+    learning = learned / max(1, len(S["learning"]))
 
-    total = round(100*(0.30*aq + 0.25*rp + 0.25*ef + 0.10*re + 0.10*lo))
-    comps = {
-        "Assumption Quality": round(aq,2),
-        "Risk Prioritization": round(rp,2),
-        "Experiment Fit": round(ef,2),
-        "Resource Efficiency": round(re,2),
-        "Learning Outcome": round(lo,2)
+    # Assumption Coverage Quality: specificity proxy of chosen assumptions
+    aq = sum(assumption_quality_from_text(a["text"]) for a in S["chosen"]) / max(1, len(S["chosen"]))
+
+    total = round(100*(0.25*prioritization + 0.25*exp_fit + 0.20*resource + 0.20*learning + 0.10*aq))
+    S["score"] = {
+        "total": total,
+        "components": {
+            "Risk Prioritization": round(prioritization,2),
+            "Experiment Fit": round(exp_fit,2),
+            "Resource Efficiency": round(resource,2),
+            "Learning Outcome": round(learning,2),
+            "Assumption Quality": round(aq,2),
+        }
     }
-    S["score"] = {"total": total, "components": comps}
 
-# -------------------------- UI helpers --------------------------
+# -------------------------- UI Blocks --------------------------
 def header():
     st.title(TITLE)
-    st.caption("Objective: Surface hidden assumptions, prioritize risk, and design scrappy experiments that maximize learning per unit of effort.")
+    st.caption("Objective: surface hidden assumptions, pick scrappy experiments, and maximize validated learning per unit of effort.")
 
-def show_assumption_table():
-    S = st.session_state.s2
-    if not S["assumptions"]: return
-    st.markdown("#### Your assumptions")
-    for i,a in enumerate(S["assumptions"]):
-        st.write(f"{i+1}. {bucket_color(a['bucket'])} **{a['bucket'].title()}** — {a['text']}  (quality {a['quality']:.2f})")
-
-def assumption_slotting():
-    S = st.session_state.s2
-    st.subheader("Assumption Slots and Buckets")
-    st.info(f"Seed idea: **{S['idea']['name']}** — {S['idea']['sketch']}")
-
-    with st.expander("How to bucket assumptions (with examples)", expanded=True):
-        st.markdown("""
-- **Desirability** → Demand & willingness to pay.  
-  _Example:_ “≥15% of target visitors will join a $10/mo waitlist within 7 days.”
-- **Feasibility** → Can we actually deliver the outcome?  
-  _Example:_ “We can fill ≥70% of empty spots using the current data sources.”
-- **Viability** → The business works (margins, churn, scale).  
-  _Example:_ “Gross margin ≥60% at $99/mo with <4 hours/week of ops.”
-
-**Nudge meanings**  
-- “**Be more specific**” → add who/what/how much/by when.  
-- “**Too broad**” → change “People want it” to a measurable behavior (click, buy, repurchase).  
-- “**Looks testable**” → it’s specific enough to run a scrappy experiment.
+def block_intro():
+    st.subheader("What you’ll do")
+    st.markdown("""
+**First you will** pick your top **3 assumptions** (from a short list).  
+**Then you will** choose quick, low-cost experiments to test them (with token constraints).  
+**Next you will** run the experiments, see data snippets with yardsticks, and iterate.  
+**Finally you will** get a score and coaching notes.
 """)
+    if st.button("Start", key="start"):
+        st.session_state.s2["stage"] = "pick"
+        st.rerun()
 
-    cols = st.columns(3)
-    bucket = cols[0].selectbox("Bucket", ["desirability","feasibility","viability"], format_func=str.title, key="ass_bucket")
-    text = cols[1].text_input("Assumption (specific & testable)", key="ass_text",
-                              placeholder="e.g., ≥15% of target visitors will join a $10/mo waitlist within 7 days.")
-
-    nudges = ""
-    if text and len(text.split()) < 6:
-        nudges = "Be more specific (who, what, how much, by when)."
-    if text and any(x in text.lower() for x in ["customers want it","people want it","everyone","they will like it"]):
-        nudges = "Too broad. Try a measurable behavior or threshold."
-
-    cols[2].markdown(f"**Nudge:** {nudges or 'Looks testable.'}")
-    if cols[2].button("Add assumption", key="btn_add_assumption"):
-        if text.strip():
-            S["assumptions"].append({"text":text.strip(), "bucket":bucket, "quality":assumption_quality(text)})
-            st.rerun()
-
-    show_assumption_table()
-    if len(S["assumptions"])<6:
-        st.warning("Add at least 6 assumptions to proceed.")
+def block_pick_assumptions():
+    st.subheader("Pick your top 3 assumptions to test")
+    st.info(f"Seed idea: **{SEED_IDEA['name']}** — {SEED_IDEA['sketch']}")
+    options = [f"{i+1}. {a['text']}  —  _{a['theme']}_" for i,a in enumerate(ASSUMPTION_CATALOG)]
+    idxs = st.multiselect("Choose exactly 3 assumptions that feel riskiest for this idea:",
+                          options=list(range(len(options))), format_func=lambda i: options[i], max_selections=3, key="pick_idxs")
+    if len(idxs) != 3:
+        st.warning("Please select exactly 3.")
     else:
-        if st.button("Proceed to Round 1 experiments", key="btn_to_round1"):
-            S["stage"]="round1"
-            S["tokens"]=8
-            push_tab(2)  # Round 1 tab index
+        st.session_state.s2["chosen"] = [ASSUMPTION_CATALOG[i] for i in idxs]
+        col1, col2, col3 = st.columns([1,1,1])
+        if col2.button("Confirm & go to Round 1", key="to_r1"):
+            S = st.session_state.s2
+            S["stage"] = "round1"
+            S["round"] = 1
+            S["tokens"] = 8
             st.rerun()
 
-def experiment_picker(round_idx):
+def block_round(round_idx:int):
     S = st.session_state.s2
-    st.subheader(f"Round {round_idx}: Pick a portfolio of experiments")
-    st.caption("Tip: start with low-cost, high-learning tests. You have **tokens** as a constraint.")
+    st.subheader(f"Round {round_idx}: pick a portfolio of experiments")
     st.write(f"Tokens available: **{S['tokens']}**")
-
-    a_opts = [f"{i+1}. {a['bucket'].title()} — {a['text'][:60]}" for i,a in enumerate(S["assumptions"])]
-    cols = st.columns(2)
-    a_idx = cols[0].selectbox("Choose an assumption", list(range(len(S["assumptions"]))),
-                              format_func=lambda i: a_opts[i], key=f"a_{round_idx}")
-    exp = cols[1].selectbox("Choose an experiment", EXPERIMENTS,
-                            format_func=lambda e: f"{e['name']} (cost {e['cost']})", key=f"e_{round_idx}")
-
+    # chooser
+    a_opts = [f"{i+1}. {a['text']}  —  _{a['theme']}_" for i,a in enumerate(S["chosen"])]
+    c1, c2 = st.columns(2)
+    a_idx = c1.selectbox("Choose an assumption", list(range(len(a_opts))), format_func=lambda i: a_opts[i], key=f"a_{round_idx}")
+    exp = c2.selectbox("Choose an experiment", EXPERIMENTS, format_func=lambda e: f"{e['name']} (cost {e['cost']})", key=f"e_{round_idx}")
     st.caption(f"About this experiment: {exp['desc']}  \n**Benchmarks:** {exp['bench']}")
 
     if st.button("Add to portfolio", key=f"add_{round_idx}"):
         cost = exp["cost"]
-        if cost>S["tokens"]:
+        if cost > S["tokens"]:
             st.error("Not enough tokens for that experiment.")
         else:
             S["tokens"] -= cost
@@ -327,67 +298,75 @@ def experiment_picker(round_idx):
     if S["portfolio"][round_idx]:
         st.markdown("#### Selected this round")
         for n,item in enumerate(S["portfolio"][round_idx], start=1):
-            a = S["assumptions"][item["assumption_idx"]]
-            e = experiment_by_key(item["exp_key"])
-            st.write(f"{n}. {bucket_color(a['bucket'])} **{a['bucket'].title()}** — {a['text']}  →  **{e['name']}** (cost {e['cost']})")
+            a = S["chosen"][item["assumption_idx"]]
+            e = next(x for x in EXPERIMENTS if x["key"]==item["exp_key"])
+            st.write(f"{n}. **{a['text']}**  (_{a['theme']}_ ) → **{e['name']}** (cost {e['cost']})")
 
-    cols2 = st.columns(2)
-    if cols2[0].button("Run experiments", disabled=(len(S["portfolio"][round_idx])==0), key=f"run_{round_idx}"):
+    cL, cR = st.columns(2)
+    if cL.button("Run experiments", disabled=(len(S["portfolio"][round_idx])==0), key=f"run_{round_idx}"):
         S["results"][round_idx] = []
         for item in S["portfolio"][round_idx]:
-            a = S["assumptions"][item["assumption_idx"]]
-            e = experiment_by_key(item["exp_key"])
-            snippet, signal = synth_result(e, a["bucket"], a["quality"])
-            S["results"][round_idx].append({"assumption":a, "exp_key":e["key"], "name":e["name"], "snippet":snippet, "signal":signal})
-            add_learning(signal, a["bucket"])
+            a = S["chosen"][item["assumption_idx"]]
+            snippet, signal = synth_result(item["exp_key"], a)
+            S["results"][round_idx].append({"assumption":a, "exp_key":item["exp_key"], "snippet":snippet, "signal":signal})
+            add_learning(a["theme"], signal)
         S["stage"] = f"results{round_idx}"
-        push_tab( round_idx + 2 )  # Results tab index: Round1->Results1(3), Round2->Results2(5), Round3->Score handled later
         st.rerun()
 
-def show_results(round_idx, next_tokens=6, next_stage="round2"):
+def block_results(round_idx:int):
     S = st.session_state.s2
     st.subheader(f"Round {round_idx} results")
     for r in S["results"][round_idx]:
-        st.success(f"**{r['name']}** → {r['snippet']}  \n({r['assumption']['bucket'].title()} | assumption quality {r['assumption']['quality']:.2f})")
-
-    st.markdown("#### Risk coverage so far")
-    rc = S["learned_risk"]
-    st.write(f"- Desirability: {rc['desirability']:.2f}   •   Feasibility: {rc['feasibility']:.2f}   •   Viability: {rc['viability']:.2f}")
+        st.success(f"- **{r['assumption']['text']}**  (_{r['assumption']['theme']}_ )\n\n{r['snippet']}")
+    st.markdown("#### Learning coverage (by theme)")
+    if S["learning"]:
+        for k,v in S["learning"].items():
+            st.write(f"- {k}: {v:.2f}")
+    else:
+        st.write("No learning recorded yet.")
 
     cols = st.columns(2)
-    if round_idx<3:
-        if cols[0].button("Plan next round", key=f"plan_next_{round_idx}"):
-            S["stage"]=next_stage
-            S["round"]=round_idx+1
-            S["tokens"]=next_tokens
-            push_tab( round_idx + 2 )  # Move from ResultsN to Round(N+1) tab
+    if round_idx == 1:
+        if cols[0].button("Plan Round 2", key="to_r2"):
+            S["stage"] = "round2"
+            S["round"] = 2
+            S["tokens"] = 6
             st.rerun()
-    if cols[1].button("Skip to scoring", key=f"skip_to_scoring_{round_idx}"):
-        S["stage"]="score"
-        compute_score()
-        push_tab(7)  # Score tab
-        st.rerun()
+        if cols[1].button("Skip to scoring", key="skip1"):
+            S["stage"] = "score"; compute_score(); st.rerun()
+    elif round_idx == 2:
+        if cols[0].button("Plan Round 3 (optional)", key="to_r3"):
+            S["stage"] = "round3"
+            S["round"] = 3
+            S["tokens"] = 4
+            st.rerun()
+        if cols[1].button("Skip to scoring", key="skip2"):
+            S["stage"] = "score"; compute_score(); st.rerun()
+    else:
+        if cols[0].button("Compute score", key="to_score"):
+            S["stage"] = "score"; compute_score(); st.rerun()
 
-def score_page():
+def block_score():
     S = st.session_state.s2
     if S["score"] is None:
         compute_score()
-    st.subheader("Score and Feedback")
+    st.subheader("Score and feedback")
     st.metric("Total Score", f"{S['score']['total']}/100")
+
     st.markdown("#### Category scores")
     for k,v in S["score"]["components"].items():
         label = ("Excellent" if v>=0.8 else "Good" if v>=0.6 else "Needs work")
         st.write(f"- **{k}:** {int(v*100)}/100 — {label}")
 
     st.markdown("#### Coaching notes")
-    st.write("- **Assumption Quality:** Specific, measurable phrasing makes results decisive.")
-    st.write("- **Risk Prioritization:** Tackle bucket top risks first; defer nice-to-know items.")
-    st.write("- **Experiment Fit:** Pick tests that maximize learning **for that bucket**.")
-    st.write("- **Resource Efficiency:** Start scrappy; leave tokens for iteration.")
-    st.write("- **Learning Outcome:** End with a clear validated/invalidated statement and next step.")
+    st.write("- **Prioritize the true riskiest items first.** Don’t spend tokens on nice-to-know tests.")
+    st.write("- **Match the test to the assumption.** Use pre-orders for price/commitment; concierge or Wizard-of-Oz for delivery/automation; landing/ad tests for demand and message.")
+    st.write("- **Use yardsticks.** Interpret numbers versus benchmarks—not in isolation.")
+    st.write("- **Iterate deliberately.** Use Round 1 results to pivot, double-down, or move to the next critical assumption.")
+    st.write("- **Capture a clear next step.** Each result should produce a validate/invalidate takeaway and your next test.")
 
     if st.button("Restart simulation", key="restart"):
-        init_state(); push_tab(0); st.rerun()
+        init_state(); st.rerun()
 
 # -------------------------- App flow --------------------------
 if "s2" not in st.session_state:
@@ -396,58 +375,22 @@ if "s2" not in st.session_state:
 S = st.session_state.s2
 header()
 
-# Tab order indices: 0 Intro • 1 Assumptions • 2 Round1 • 3 Results1 • 4 Round2 • 5 Results2 • 6 Round3 • 7 Score
-tabs = st.tabs(["Intro","Assumptions","Round 1","Results 1","Round 2","Results 2","Round 3 (optional)","Score"])
-
-with tabs[0]:
-    st.subheader("What you’ll do in this simulation")
-    st.markdown("""
-**First you will** write down your key assumptions and sort each one into a risk bucket:
-- **Desirability** (Do customers want it? Will they pay?)
-- **Feasibility** (Can you deliver it reliably?)
-- **Viability** (Does the model work as a business?)
-
-**Then you will** choose quick, scrappy experiments from a menu (e.g., landing page, concierge MVP, pre-order).  
-Each experiment has a **token cost**, **speed**, and expected **learning gain** for a bucket.
-
-**Next you will** run a small portfolio of experiments in **Round 1**.  
-Results will surface data snippets (CTR, pre-orders, repurchase). Your assumption wording affects how clear the signals are.
-
-**After that you will** decide what to do in **Round 2** (and optional **Round 3**):
-- **Pivot** to riskier assumptions, **double-down** on promise, or **tackle** the next critical risk.
-
-**Finally you will** see a score and coaching notes based on:
-- **Assumption Quality**, **Risk Prioritization**, **Experiment Fit**, **Resource Efficiency**, **Learning Outcome**.
-""")
-    if st.button("Start", key="start_intro"):
-        S["stage"] = "slots"
-        push_tab(1)  # Assumptions tab
-        st.rerun()
-
-with tabs[1]:
-    if S["stage"] in ["slots","round1","results1","round2","results2","round3","score"]:
-        assumption_slotting()
-
-with tabs[2]:
-    if S["stage"] in ["round1","results1","round2","results2","round3","score"]:
-        experiment_picker(1)
-
-with tabs[3]:
-    if S["stage"] in ["results1","round2","results2","round3","score"]:
-        show_results(1, next_tokens=6, next_stage="round2")
-
-with tabs[4]:
-    if S["stage"] in ["round2","results2","round3","score"]:
-        experiment_picker(2)
-
-with tabs[5]:
-    if S["stage"] in ["results2","round3","score"]:
-        show_results(2, next_tokens=4, next_stage="round3")
-
-with tabs[6]:
-    if S["stage"] in ["round3","score"]:
-        experiment_picker(3)
-
-with tabs[7]:
-    if S["stage"]=="score":
-        score_page()
+stage = S["stage"]
+if stage == "intro":
+    block_intro()
+elif stage == "pick":
+    block_pick_assumptions()
+elif stage == "round1":
+    block_round(1)
+elif stage == "results1":
+    block_results(1)
+elif stage == "round2":
+    block_round(2)
+elif stage == "results2":
+    block_results(2)
+elif stage == "round3":
+    block_round(3)
+elif stage == "results3":
+    block_results(3)
+else:
+    block_score()
