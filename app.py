@@ -1,7 +1,7 @@
 # Startup Simulation #2 — Assumptions → Experiments → Learning (Streamlit)
 # -----------------------------------------------------------------------
 # Run locally:  streamlit run app_sim2.py
-# On Streamlit Cloud: add/commit this file and deploy with main file path = app_sim2.py
+# On Streamlit Cloud: deploy with main file path = app_sim2.py
 # -----------------------------------------------------------------------
 
 import random
@@ -23,24 +23,19 @@ SEED_IDEA = {
     )
 }
 
-# Hidden “truth” map (this guides noisy outcomes). Each bucket gets a top risk.
+# Hidden “truth” map (guides noisy outcomes). Each bucket gets a top risk.
 GROUND_TRUTH = {
     "desirability": {"willing_to_pay": 0.6, "real_problem": 0.9, "findability": 0.5},
     "feasibility":  {"ops_capacity": 0.7, "tooling_speed": 0.5, "data_access": 0.8},
     "viability":    {"unit_economics": 0.8, "churn_risk": 0.7, "scalability": 0.9},
-    # Highest risks overall (used in scoring/prioritization eval)
     "top": {"desirability":"real_problem", "feasibility":"data_access", "viability":"scalability"}
 }
 
 # -------------------------- Experiment catalog --------------------------
 EXPERIMENTS = [
-    {
-        "key":"landing_page",
-        "name":"Landing page / smoke test",
-        "cost":2, "speed":"days",
-        "gain":{"desirability":0.6, "feasibility":0.0, "viability":0.2},
-        "desc":"Drive traffic; measure clicks, signups, or waitlist."
-    },
+    {"key":"landing_page","name":"Landing page / smoke test","cost":2,"speed":"days",
+     "gain":{"desirability":0.6,"feasibility":0.0,"viability":0.2},
+     "desc":"Drive traffic; measure clicks, signups, or waitlist."},
     {"key":"concierge_mvp","name":"Concierge MVP","cost":3,"speed":"days",
      "gain":{"desirability":0.4,"feasibility":0.5,"viability":0.2},
      "desc":"Manually deliver service for a few customers."},
@@ -89,16 +84,15 @@ def assumption_quality(text):
     length = len(t.split())
     return max(0.2, min(1.0, 0.2 + 0.1*cues + 0.02*min(length, 30)))
 
-def experiment_by_key(k): return next(e for e in EXPERIMENTS if e["key"]==k)
+def experiment_by_key(k): 
+    return next(e for e in EXPERIMENTS if e["key"]==k)
 
 def synth_result(exp, bucket, a_quality):
     """Generate a semi-random snippet biased by ground truth & assumption quality."""
-    # strength = base gain for chosen bucket * quality; steer by hidden top risk
     base = exp["gain"].get(bucket, 0.0)
     steer = 1.15 if GROUND_TRUTH["top"][bucket] in ("real_problem","data_access","scalability") else 1.0
     signal = base * a_quality * steer
 
-    # Convert to specific snippets per exp type
     if exp["key"]=="landing_page":
         imps = random.randint(300, 800)
         ctr = max(0.5, min(14.0, 2 + 12*signal + random.uniform(-1.5,1.5)))  # %
@@ -143,35 +137,34 @@ def compute_score():
     # Assumption Quality
     q = [a["quality"] for a in S["assumptions"]]
     aq = (sum(q)/len(q)) if q else 0.0
-    # Risk Prioritization: how much learning on the top risks early (round 1 weight)
+    # Risk Prioritization: credit if round-1 targeted bucket top risks
     rp = 0.0
     if S["results"][1]:
-        # credit if any round-1 tests targeted GT top risks in each bucket
         hits = 0
         for b in ["desirability","feasibility","viability"]:
             top = GROUND_TRUTH["top"][b]
             if any(r["assumption"]["bucket"]==b and top in r["assumption"]["text"].lower() for r in S["results"][1]):
                 hits += 1
         rp = hits/3.0
-    # Experiment Fit: bucket-gain alignment vs chosen assumption bucket
+    # Experiment Fit: bucket-gain alignment
     fits = []
     for rnd in [1,2,3]:
         for r in S["results"][rnd]:
             exp = experiment_by_key(r["exp_key"])
             fits.append(exp["gain"].get(r["assumption"]["bucket"],0.0))
     ef = (sum(fits)/len(fits)) if fits else 0.0
-    # Resource Efficiency: used lower-cost first and left room for iteration
+    # Resource Efficiency
     c_rounds = []
     for rnd in [1,2,3]:
         cost = sum(experiment_by_key(x["exp_key"])["cost"] for x in S["portfolio"][rnd])
         if cost>0: c_rounds.append(cost)
     re = 1.0
     if c_rounds:
-        re -= 0.15*max(0, (c_rounds[0]-6)/3)  # penalize over-spend in round 1
+        re -= 0.15*max(0, (c_rounds[0]-6)/3)  # penalize heavy spend in round 1
         if len(c_rounds)>=2 and c_rounds[1]==0:
-            re -= 0.2                              # no iteration
+            re -= 0.2                      # no iteration
     re = max(0.0, min(1.0, re))
-    # Learning Outcome: at least one clear validated/invalidated statement per bucket?
+    # Learning Outcome: clear validate/invalid per bucket?
     lo = sum(1 for b in ["desirability","feasibility","viability"] if S["learned_risk"][b]>0.55) / 3.0
 
     total = round(100*(0.30*aq + 0.25*rp + 0.25*ef + 0.10*re + 0.10*lo))
@@ -213,7 +206,7 @@ def assumption_slotting():
     if cols[2].button("Add assumption"):
         if text.strip():
             S["assumptions"].append({"text":text.strip(), "bucket":bucket, "quality":assumption_quality(text)})
-            st.experimental_rerun()
+            st.rerun()
 
     show_assumption_table()
     if len(S["assumptions"])<6:
@@ -222,7 +215,7 @@ def assumption_slotting():
         if st.button("Proceed to Round 1 experiments"):
             S["stage"]="round1"
             S["tokens"]=8
-            st.experimental_rerun()
+            st.rerun()
 
 def experiment_picker(round_idx):
     S = st.session_state.s2
@@ -241,7 +234,7 @@ def experiment_picker(round_idx):
         else:
             S["tokens"] -= cost
             S["portfolio"][round_idx].append({"assumption_idx": a_idx, "exp_key": exp["key"]})
-            st.experimental_rerun()
+            st.rerun()
 
     # show portfolio
     if S["portfolio"][round_idx]:
@@ -262,14 +255,14 @@ def experiment_picker(round_idx):
             S["results"][round_idx].append({"assumption":a, "exp_key":e["key"], "name":e["name"], "snippet":snippet, "signal":signal})
             add_learning(signal, a["bucket"])
         S["stage"] = f"results{round_idx}"
-        st.experimental_rerun()
+        st.rerun()
 
 def show_results(round_idx, next_tokens=6, next_stage="round2"):
     S = st.session_state.s2
     st.subheader(f"Round {round_idx} results")
     for r in S["results"][round_idx]:
         st.success(f"**{r['name']}** → {r['snippet']}  \n({r['assumption']['bucket'].title()} | assumption quality {r['assumption']['quality']:.2f})")
-    # heatmap-like summary (simple)
+    # simple coverage view
     st.markdown("#### Risk coverage so far")
     rc = S["learned_risk"]
     st.write(f"- Desirability: {rc['desirability']:.2f}   •   Feasibility: {rc['feasibility']:.2f}   •   Viability: {rc['viability']:.2f}")
@@ -280,11 +273,11 @@ def show_results(round_idx, next_tokens=6, next_stage="round2"):
             S["stage"]=next_stage
             S["round"]=round_idx+1
             S["tokens"]=next_tokens
-            st.experimental_rerun()
+            st.rerun()
     if cols[1].button("Skip to scoring"):
         S["stage"]="score"
         compute_score()
-        st.experimental_rerun()
+        st.rerun()
 
 def score_page():
     S = st.session_state.s2
@@ -297,7 +290,6 @@ def score_page():
         label = ("Excellent" if v>=0.8 else "Good" if v>=0.6 else "Needs work")
         st.write(f"- **{k}:** {int(v*100)}/100 — {label}")
 
-    # quick coaching notes
     st.markdown("#### Coaching notes")
     st.write("- **Assumption Quality:** Specific, measurable phrasing makes results decisive.")
     st.write("- **Risk Prioritization:** Tackle bucket top risks first; defer nice-to-know items.")
@@ -306,7 +298,7 @@ def score_page():
     st.write("- **Learning Outcome:** End with a clear validated/invalidated statement and next step.")
 
     if st.button("Restart simulation"):
-        init_state(); st.experimental_rerun()
+        init_state(); st.rerun()
 
 # -------------------------- App flow --------------------------
 if "s2" not in st.session_state:
@@ -318,16 +310,34 @@ header()
 tabs = st.tabs(["Intro","Assumptions","Round 1","Results 1","Round 2","Results 2","Round 3 (optional)","Score"])
 
 with tabs[0]:
-    st.subheader("Objective")
-    st.write("Surface hidden assumptions, prioritize by risk, and design scrappy experiments that maximize validated learning per unit of effort.")
-    st.markdown("**Flow (45–60 min)**  \n"
-                "• Fill 6–8 assumption slots → risk buckets  \n"
-                "• Round 1: pick experiments (tokens)  \n"
-                "• Review results → iterate in Round 2  \n"
-                "• Optional Round 3 high-cost test  \n"
-                "• Debrief + scoring")
+    st.subheader("What you’ll do in this simulation")
+    st.markdown("""
+**First you will** write down your key assumptions and sort each one into a risk bucket:
+- **Desirability** (Do customers want it? Will they pay?)
+- **Feasibility** (Can you deliver it reliably?)
+- **Viability** (Does the model work as a business?)
+
+**Then you will** choose quick, scrappy experiments from a menu (e.g., landing page, concierge MVP, pre-order).
+Each experiment has a **token cost**, **speed**, and expected **learning gain** for a bucket.
+
+**Next you will** run a small portfolio of experiments in **Round 1**.  
+Results will surface data snippets (e.g., CTR, pre-orders). Your assumption wording affects how clear the signals are.
+
+**After that you will** decide what to do in **Round 2** (and optional **Round 3**):
+- **Pivot** to riskier assumptions,
+- **Double-down** on something promising, or
+- **Tackle** the next critical risk.
+
+**Finally you will** see a score and coaching notes based on:
+- **Assumption Quality** (specific & measurable),
+- **Risk Prioritization** (did you test the riskiest things first?),
+- **Experiment Fit** (right test for the right risk),
+- **Resource Efficiency** (smart token use), and
+- **Learning Outcome** (clear validate/invalidate + next step).
+""")
     if st.button("Start"):
-        S["stage"]="slots"; st.experimental_rerun()
+        S["stage"] = "slots"
+        st.rerun()
 
 with tabs[1]:
     if S["stage"] in ["slots","round1","results1","round2","results2","round3","score"]:
