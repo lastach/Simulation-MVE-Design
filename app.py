@@ -1,579 +1,625 @@
-# Startup Simulation #2 — Assumptions → Experiments → Learning (card-pick, generalized experiment copy)
+# app_sim2.py
+# Simulation #2 — Designing & Running Early Experiments (ThermaLoop)
 # Run: streamlit run app_sim2.py
 
 import random
-from copy import deepcopy
+from typing import Dict, Any, List, Tuple
+import pandas as pd
 import streamlit as st
 
-random.seed(17)
-st.set_page_config(page_title="Simulation #2: Assumptions → Experiments", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Simulation #2 — Scrappy Experiments", page_icon="🧪", layout="wide")
+random.seed(42)
 
-TITLE = "Startup Simulation #2 — Assumptions → Experiments → Learning"
+TITLE = "Simulation #2 — Designing & Running Early Experiments"
+SUB   = "ThermaLoop: pick riskiest assumptions, run scrappy tests, and learn fast"
 
-# --------------------------------------------------------------------------------------
-# Seed idea (kept for narrative; scoring does not hinge on it directly)
-# --------------------------------------------------------------------------------------
-SEED_IDEA = {
-    "name": "Keep Classes Reliably Full for Independent Gyms",
-    "sketch": (
-        "You’re exploring a service a typical gym owner could use to keep classes consistently full. "
-        "It watches signals (bookings, cancellations, weather, local events) and recommends quick actions "
-        "(member swaps, timely promos, partner shares). Target price: $79–$149/month."
-    )
+# ───────────────────────────────────────────────────────────────────────────────
+# IDEA CARDS (derived from Sim #1 “best” problem statements)
+# Each assumption also carries simple TAGS to help experiment-fit & results
+# Hidden_truth: 'H' (high risk), 'M', 'L' controls result bias
+# ───────────────────────────────────────────────────────────────────────────────
+
+IDEA_CARDS: Dict[str, Dict[str, Any]] = {
+    "Comfort-First Home Kit (Homeowners)": {
+        "desc": "Smart vent retrofit for homeowners to fix hot/cold rooms quickly and affordably.",
+        "assumptions": [
+            {"id":"A1","text":"Uneven room temperature is a top-3 annoyance for target homeowners.","tags":["demand","comfort"],"truth":"M"},
+            {"id":"A2","text":"Homeowners will pay $200–$300 for noticeable comfort improvement even without energy savings.","tags":["wtp","pricing","comfort"],"truth":"M"},
+            {"id":"A3","text":"Install can be completed in under 20 minutes by a non-expert.","tags":["install_time","feasibility"],"truth":"H"},
+            {"id":"A4","text":"The device fits 90% of standard vent sizes without modification.","tags":["compat","feasibility"],"truth":"M"},
+            {"id":"A5","text":"Comfort improvement is noticeable within 48 hours.","tags":["comfort","time_to_value"],"truth":"L"},
+            {"id":"A6","text":"Noise from the motor is no louder than a typical fan at night.","tags":["noise","quality"],"truth":"M"},
+            {"id":"A7","text":"Self-install is preferred over calling a contractor.","tags":["channel","self_install","demand"],"truth":"L"},
+            {"id":"A8","text":"App setup can be completed in under 5 minutes.","tags":["onboarding","feasibility","ux"],"truth":"M"},
+            {"id":"A9","text":"Customers prefer comfort gains over energy savings as the main benefit.","tags":["positioning","comfort"],"truth":"L"},
+            {"id":"A10","text":"Users will share/advocate if it fixes a daily annoyance.","tags":["referral","demand"],"truth":"M"},
+        ],
+    },
+    "Installer-Enablement System (HVAC channel)": {
+        "desc": "Toolkit sold via installers to reduce callbacks and create an upsell.",
+        "assumptions": [
+            {"id":"B1","text":"Installers experience at least 2+ comfort-related callbacks per month.","tags":["callbacks","installer_econ"],"truth":"L"},
+            {"id":"B2","text":"Reducing callbacks measurably improves NPS/reviews for installers.","tags":["callbacks","evidence"],"truth":"M"},
+            {"id":"B3","text":"A 15–20% commission is enough incentive to promote the product.","tags":["commission","wtp_installer"],"truth":"M"},
+            {"id":"B4","text":"Installers can learn install steps within 30 minutes after training.","tags":["training","feasibility"],"truth":"H"},
+            {"id":"B5","text":"The kit adds ≤15 minutes to a typical job.","tags":["install_time","feasibility"],"truth":"M"},
+            {"id":"B6","text":"Homeowners trust installer upsells for comfort solutions.","tags":["trust","channel"],"truth":"M"},
+            {"id":"B7","text":"Manufacture-backed guarantee is sufficient to reduce installer risk.","tags":["warranty","risk"],"truth":"M"},
+            {"id":"B8","text":"Avoiding one callback per month makes the product worthwhile.","tags":["unit_econ","roi_installer"],"truth":"M"},
+            {"id":"B9","text":"Utility rebates significantly improve close rates.","tags":["rebates","viability"],"truth":"L"},
+            {"id":"B10","text":"Installers will use a companion training/certification app.","tags":["training","adoption"],"truth":"M"},
+        ],
+    },
+    "Landlord Energy Optimization Service (Property owners)": {
+        "desc": "Managed subscription for landlords to reduce HVAC waste and complaints across units.",
+        "assumptions": [
+            {"id":"C1","text":"Landlords track heating/cooling complaints as a meaningful KPI.","tags":["complaints","ops"],"truth":"M"},
+            {"id":"C2","text":"Payback under 24 months is essential for adoption.","tags":["payback","viability"],"truth":"H"},
+            {"id":"C3","text":"Monthly subscription pricing is preferred over upfront purchases.","tags":["pricing_model","subscription"],"truth":"M"},
+            {"id":"C4","text":"Tenants will not tamper with installed devices.","tags":["tamper","reliability"],"truth":"M"},
+            {"id":"C5","text":"Bulk installs (≥10 units/day) are feasible with small teams.","tags":["deployment","feasibility"],"truth":"H"},
+            {"id":"C6","text":"Property managers can act on real-time temperature alerts.","tags":["ops","alerting","activation"],"truth":"M"},
+            {"id":"C7","text":"Utility rebates significantly improve ROI and adoption.","tags":["rebates","viability"],"truth":"L"},
+            {"id":"C8","text":"Reduced tenant turnover is more valued than direct energy savings.","tags":["value","positioning"],"truth":"M"},
+            {"id":"C9","text":"Maintenance teams can handle retrofits without third parties.","tags":["maintenance","feasibility"],"truth":"M"},
+            {"id":"C10","text":"'Smart sustainability features' improve property marketing.","tags":["marketing","demand"],"truth":"L"},
+        ],
+    },
 }
 
-# --------------------------------------------------------------------------------------
-# Assumption catalog (12) — actionable, owner-outcome statements
-# --------------------------------------------------------------------------------------
-ASSUMPTIONS = [
-    {"text":"We can raise fill rate to ≥80% for weekday 2–4pm classes within 14 days.",
-     "theme":"Fill Rate", "metric":"Avg fill % (target ≥80%)", "threshold":0.80, "risk":0.90},
-    {"text":"At least 25% of trial owners will agree to pay $99/month after a 2-week pilot.",
-     "theme":"Price Acceptance", "metric":"Pilot→paid conversion (target ≥25%)", "threshold":0.25, "risk":0.80},
-    {"text":"We can acquire the first 10 trial owners at ≤$40 each.",
-     "theme":"Acquisition Cost", "metric":"CAC for trial owners (target ≤$40)", "threshold":40, "risk":0.60},
-    {"text":"Owners can complete setup in ≤60 minutes without live help.",
-     "theme":"Setup Time", "metric":"Time to first use (target ≤60 min)", "threshold":60, "risk":0.65},
-    {"text":"Owners will act on ≥70% of our fill prompts in the first 2 weeks.",
-     "theme":"Owner Engagement", "metric":"Prompt action rate (target ≥70%)", "threshold":0.70, "risk":0.70},
-    {"text":"After value appears, monthly churn will be ≤5%.",
-     "theme":"Retention", "metric":"Monthly churn (target ≤5%)", "threshold":0.05, "risk":0.65},
-    {"text":"Gross margin can be ≥60% at $99/month.",
-     "theme":"Margin", "metric":"Gross margin (target ≥60%)", "threshold":0.60, "risk":0.75},
-    {"text":"The approach works for 200+ gyms without response delays.",
-     "theme":"Scale", "metric":"On-time suggestion rate at 200+ gyms (target ≥90%)", "threshold":0.90, "risk":0.90},
-    {"text":"Local partner studios will share 3–5 empty spots per week.",
-     "theme":"Partner Referrals", "metric":"Weekly partner shares (target ≥3)", "threshold":3, "risk":0.55},
-    {"text":"New owners will see value (≥10 extra bookings) within 14 days.",
-     "theme":"Time-to-Value", "metric":"Extra bookings in 14 days (target ≥10)", "threshold":10, "risk":0.70},
-    {"text":"Switching from current process takes ≤30 minutes and 0 data migrations.",
-     "theme":"Switching Friction", "metric":"Switch effort (target ≤30 min; no migrations)", "threshold":30, "risk":0.55},
-    {"text":"Staff workload will not exceed 3 hours/week per gym.",
-     "theme":"Staff Load", "metric":"Ops time per week (target ≤3h)", "threshold":3, "risk":0.60},
-]
+# Experiments: description + cost + tags they fit best + sample result generators
+EXPERIMENTS = {
+    "Landing Page Test":   {"cost":2, "fits":["demand","wtp","positioning","pricing"], "desc":"Quick page + traffic to measure message/price intent."},
+    "Concierge Trial":     {"cost":3, "fits":["comfort","time_to_value","quality","ux"], "desc":"Manually deliver the service to 3–5 targets; observe behavior."},
+    "Prototype Demo":      {"cost":2, "fits":["feasibility","install_time","compat","noise","onboarding"], "desc":"Lightweight mock or video walkthrough; observe usability/fit."},
+    "Expert Interview":    {"cost":1, "fits":["training","ops","warranty","rebates","channel","trust"], "desc":"Interview 1–2 experts for constraints and realism."},
+    "Pre-Order Test":      {"cost":3, "fits":["wtp","pricing","subscription"], "desc":"Collect soft payments or deposit intent at target price."},
+    "Data Comparison":     {"cost":2, "fits":["comfort","evidence","callbacks","unit_econ","payback"], "desc":"Measure comfort/complaints/ROI vs current setup."},
+}
 
-# Hidden top risks (used for scoring “Risk Prioritization”)
-TOP_THEMES = {a["theme"] for a in sorted(ASSUMPTIONS, key=lambda x: x["risk"], reverse=True)[:3]}
+# Round token policy
+ROUND1_TOKENS = 6
+TOTAL_TOKENS   = 8  # round2 adds (TOTAL - spent_in_round1). Round3 appears only if ≥2 tokens remain.
 
-# --------------------------------------------------------------------------------------
-# Experiments — generalized (non-leading) descriptions
-# gain maps = what kinds of assumptions each format tends to de-risk (0..1)
-# --------------------------------------------------------------------------------------
-EXPERIMENTS = [
-    {
-        "key":"landing",
-        "name":"Landing-page ‘interest’ check",
-        "cost":2, "speed":"days",
-        "gain":{"Fill Rate":0.5,"Price Acceptance":0.3,"Acquisition Cost":0.3,"Time-to-Value":0.3},
-        "do":"Publish a simple value promise and invite prospects to signal interest.",
-        "measure":"Impressions, click-through, signups/hand-raises.",
-        "decide":"Compare measured rates to simple yardsticks (e.g., CTR <2% weak, >8% strong)."
-    },
-    {
-        "key":"preorder",
-        "name":"Commitment (pre-order) test",
-        "cost":4, "speed":"weeks",
-        "gain":{"Price Acceptance":0.8,"Fill Rate":0.4},
-        "do":"Invite a small group to reserve access with a refundable charge.",
-        "measure":"Share of invitees who confirm with a card.",
-        "decide":"Higher confirm rates indicate real purchase intent (e.g., <5% weak, >12% strong)."
-    },
-    {
-        "key":"concierge",
-        "name":"Concierge trial (manual delivery)",
-        "cost":3, "speed":"days",
-        "gain":{"Fill Rate":0.6,"Owner Engagement":0.5,"Time-to-Value":0.5,"Staff Load":0.3},
-        "do":"Manually provide the intended outcome for a tiny cohort over a short period.",
-        "measure":"Outcome delta, user follow-through, and your weekly effort.",
-        "decide":"If outcomes improve with reasonable effort and users follow through, it’s a strong signal."
-    },
-    {
-        "key":"wizo",
-        "name":"‘Looks real’ prototype",
-        "cost":3, "speed":"days",
-        "gain":{"Setup Time":0.5,"Owner Engagement":0.3,"Staff Load":0.3},
-        "do":"Present the intended workflow while handling behind-the-scenes steps manually.",
-        "measure":"Completion time and where users stumble or need help.",
-        "decide":"Short, mostly self-serve flows are strong; repeated stalls mean redesign."
-    },
-    {
-        "key":"ad_split",
-        "name":"Message split test (A/B)",
-        "cost":3, "speed":"days",
-        "gain":{"Acquisition Cost":0.5,"Fill Rate":0.5},
-        "do":"Show two concise messages to the same audience.",
-        "measure":"Relative engagement and cost differences.",
-        "decide":"Bigger gaps imply a clearer direction; small gaps mean iterate or try new angles."
-    },
-    {
-        "key":"benchmark",
-        "name":"Compare to current workaround",
-        "cost":2, "speed":"days",
-        "gain":{"Time-to-Value":0.4,"Switching Friction":0.5,"Margin":0.3},
-        "do":"Run your approach head-to-head with the usual way across a short checklist.",
-        "measure":"Wins on time saved, errors avoided, and outcomes.",
-        "decide":"More wins = clearer advantage; ties suggest you’re not different enough yet."
-    },
-    {
-        "key":"partner_probe",
-        "name":"Quick partner appetite check",
-        "cost":1, "speed":"days",
-        "gain":{"Partner Referrals":0.7,"Acquisition Cost":0.3},
-        "do":"Send a handful of polite outreach notes describing a tiny, specific ask.",
-        "measure":"Genuine yeses and concrete offers to try.",
-        "decide":"A few earnest yeses justify a deeper test; silence means reframe or pause."
-    },
-    {
-        "key":"ops_interview",
-        "name":"Ops & cost chat (lightweight)",
-        "cost":1, "speed":"days",
-        "gain":{"Margin":0.5,"Staff Load":0.4,"Scale":0.3},
-        "do":"Short conversations with operators to map effort, costs, and peak-load risks.",
-        "measure":"Ballpark labor and unit costs; steps that won’t scale.",
-        "decide":"Healthy margin with no obvious bottleneck is a green light to proceed."
-    },
-    {
-        "key":"scale_drill",
-        "name":"Throughput dry-run",
-        "cost":2, "speed":"days",
-        "gain":{"Scale":0.7,"Owner Engagement":0.2},
-        "do":"Simulate higher volume and observe timing/queue behavior.",
-        "measure":"On-time rate and backlogs under a larger load.",
-        "decide":"High on-time rates suggest headroom; backlogs indicate limits to address."
-    },
-]
+# ───────────────────────────────────────────────────────────────────────────────
+# Utility
+# ───────────────────────────────────────────────────────────────────────────────
+def clamp(x, lo, hi): return max(lo, min(hi, x))
 
-# --------------------------------------------------------------------------------------
-# State
-# --------------------------------------------------------------------------------------
+def fit_score(exp_name: str, assumption_tags: List[str]) -> float:
+    """How well an experiment type matches an assumption's tags."""
+    exp = EXPERIMENTS[exp_name]
+    overlap = len(set(exp["fits"]).intersection(assumption_tags))
+    return min(1.0, 0.35 + 0.2 * overlap)  # base 0.35 + 0.2 per tag overlap
+
+def truth_bias(truth: str) -> float:
+    """H: harder to validate (lower success prob), M: mixed, L: easier."""
+    return {"H": 0.35, "M": 0.55, "L": 0.75}[truth]
+
+def simulate_result(exp_name: str, assumption: Dict[str,Any]) -> Dict[str,Any]:
+    """Generate a data snippet influenced by truth + fit + randomness."""
+    base = truth_bias(assumption["truth"])
+    fit  = fit_score(exp_name, assumption["tags"])
+    p_success = clamp(0.15 + 0.6*fit*base + random.uniform(-0.08, 0.08), 0.05, 0.95)
+
+    # A few canned metrics per experiment
+    if exp_name == "Landing Page Test":
+        visits = random.randint(600, 1800)
+        ctr = round(100*clamp(random.gauss(0.035 + 0.03*(fit-0.5), 0.01), 0.005, 0.12), 1)  # %
+        signup = round(100*clamp(random.gauss(0.03 + 0.025*(fit-0.5), 0.01), 0.003, 0.10), 1)
+        verdict = "positive" if random.random() < p_success else "weak"
+        note = "Comfort headline outperformed savings by +0.9pp." if fit>0.6 else "Signal present but modest."
+        return {"metric": f"{visits} visits • CTR {ctr}% • Signup {signup}%", "verdict": verdict, "note": note}
+
+    if exp_name == "Concierge Trial":
+        n = random.randint(3,5)
+        noticed = random.randint(max(1,int(n*(0.4+0.4*fit))), n)
+        temp_delta = round(random.uniform(1.0, 3.5)*(0.8+0.6*fit), 1)
+        verdict = "positive" if random.random() < p_success else "mixed"
+        note = f"{noticed}/{n} reported clear comfort gain; avg Δ {temp_delta}°F."
+        return {"metric": note, "verdict": verdict, "note":"Noise acceptable; manual effort high."}
+
+    if exp_name == "Prototype Demo":
+        jams = max(0, int(random.gauss(1.2 - 1.0*fit, 0.7)))
+        install = round(random.uniform(12, 28) * (1.1 - 0.5*fit), 0)
+        noise = round(random.uniform(30, 45) * (1.2 - 0.3*fit), 0)  # dB
+        verdict = "positive" if (random.random() < p_success and jams<=1 and install<=20) else ("mixed" if jams<=2 else "negative")
+        return {"metric": f"Install {install} min • jams {jams} • ~{noise} dB", "verdict": verdict, "note":"Usability observations gathered."}
+
+    if exp_name == "Expert Interview":
+        key = random.choice(["install time feasible","training curve moderate","rebate pathway promising","warranty expectation high"])
+        verdict = "positive" if random.random() < p_success else "weak"
+        return {"metric": f"Expert view: {key}", "verdict": verdict, "note":"Directional evidence; not a customer signal."}
+
+    if exp_name == "Pre-Order Test":
+        leads = random.randint(60, 220)
+        cards = int(leads * clamp(0.03 + 0.05*(fit-0.5) + random.uniform(-0.01,0.01), 0.01, 0.12))
+        verdict = "positive" if random.random() < p_success and cards>=3 else "weak"
+        return {"metric": f"{leads} leads • {cards} confirmed cards", "verdict": verdict, "note":"Price sensitivity visible."}
+
+    if exp_name == "Data Comparison":
+        delta = round(random.uniform(1.0, 3.0)*(0.9+0.5*fit), 1)
+        complaints = random.randint(0, max(0, int(3 - 2*fit + random.uniform(-1,1))))
+        verdict = "positive" if random.random() < p_success else ("mixed" if complaints<=1 else "weak")
+        return {"metric": f"Avg room Δ {delta}°F • complaints {complaints}", "verdict": verdict, "note":"Quant baseline captured."}
+
+    return {"metric":"—","verdict":"weak","note":"Noisy read."}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# APP STATE
+# ───────────────────────────────────────────────────────────────────────────────
 def init_state():
-    st.session_state.s2 = {
-        "stage": "intro",     # intro -> pick -> round1 -> results1 -> round2 -> results2 -> (round3) -> score
-        "idea": deepcopy(SEED_IDEA),
-        "chosen_idx": [],     # indices into ASSUMPTIONS (must be 3)
-        "round": 1,
-        "tokens": 8,          # round1=8, round2=6, round3=4
-        "portfolio": {1:[],2:[],3:[]},   # [{ass_idx, exp_key}]
-        "results": {1:[],2:[],3:[]},     # [{ass_idx, exp_key, snippet, pass_band, signal}]
-        "learning": {},       # theme -> [0..1]
+    st.session_state.sim2 = {
+        "stage":"intro",
+        "idea_key": None,
+        "round1": {
+            "picked": [],    # [(assumption_id, exp_name)]
+            "results": {},   # assumption_id -> result dict
+            "statuses": {},  # assumption_id -> Validated/Weakened/Still Risky/Invalidated
+            "tokens_spent": 0
+        },
+        "round2": {
+            "picked": [],
+            "results": {},
+            "statuses": {},
+            "tokens_spent": 0
+        },
+        "round3": {
+            "picked": [],
+            "results": {},
+            "statuses": {},
+            "tokens_spent": 0
+        },
+        "assumption_status": {},  # global current status by assumption_id
+        "learning": {
+            "most_reduced": None,
+            "evidence": "",
+            "remaining": None,
+            "next_test": None,
+            "success_metric": ""
+        },
         "score": None,
-        "explanations": {}
+        "coaching": {},
     }
-
-if "s2" not in st.session_state:
+if "sim2" not in st.session_state:
     init_state()
-S = st.session_state.s2
+S = st.session_state.sim2
 
-# --------------------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------------------
-def a_quality(text: str) -> float:
-    t = text.lower()
-    cues = sum(x in t for x in ["≥","≤","%","$"," minutes"," hours"," days"," weeks"," month"," extra"," conversion"])
-    return max(0.2, min(1.0, 0.2 + 0.08*cues + 0.015*min(len(t.split()), 36)))
+# ───────────────────────────────────────────────────────────────────────────────
+# STAGE BAR
+# ───────────────────────────────────────────────────────────────────────────────
+STAGES = [
+    "intro","idea","r1_select","r1_results","r2_select","r2_results","r3_select","r3_results","summary","score"
+]
+LABELS = {
+    "intro":"Intro",
+    "idea":"Choose Idea",
+    "r1_select":"Round 1 — Select",
+    "r1_results":"Round 1 — Results",
+    "r2_select":"Round 2 — Select",
+    "r2_results":"Round 2 — Results",
+    "r3_select":"Round 3 — Select",
+    "r3_results":"Round 3 — Results",
+    "summary":"Learning Summary",
+    "score":"Feedback & Score"
+}
+def stage_bar():
+    cols = st.columns(len(STAGES))
+    for i,k in enumerate(STAGES):
+        cur_i = STAGES.index(S["stage"])
+        prefix = "✅ " if i < cur_i else ("👉 " if i == cur_i else "")
+        if cols[i].button(f"{prefix}{LABELS[k]}", key=f"nav_{k}"):
+            # allow only backward nav
+            if i <= cur_i:
+                S["stage"] = k
+                st.rerun()
 
-def exp_gain(exp_key, theme):
-    exp = next(e for e in EXPERIMENTS if e["key"] == exp_key)
-    return exp["gain"].get(theme, 0.0)
+# ───────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ───────────────────────────────────────────────────────────────────────────────
+def get_idea() -> Dict[str,Any]:
+    return IDEA_CARDS[S["idea_key"]] if S["idea_key"] else None
 
-def add_learning(theme, signal):
-    S["learning"][theme] = min(1.0, S["learning"].get(theme, 0.0) + 0.6*signal)
+def assumptions_df(idea_key: str) -> pd.DataFrame:
+    rows=[]
+    for a in IDEA_CARDS[idea_key]["assumptions"]:
+        status = S["assumption_status"].get(a["id"], "Unassessed")
+        rows.append({"ID":a["id"], "Assumption":a["text"], "Status":status})
+    return pd.DataFrame(rows)
 
-def decide_band(kind: str, value: float, threshold) -> str:
-    if kind in ["Fill Rate","Owner Engagement","Margin","Scale","Time-to-Value"]:
-        return "Pass" if value >= threshold else ("Borderline" if value >= threshold*0.9 else "Needs work")
-    if kind in ["Price Acceptance"]:
-        return "Pass" if value >= threshold else ("Borderline" if value >= threshold*0.75 else "Needs work")
-    if kind in ["Acquisition Cost","Setup Time","Switching Friction","Staff Load"]:
-        return "Pass" if value <= threshold else ("Borderline" if value <= threshold*1.25 else "Needs work")
-    if kind in ["Retention"]:
-        return "Pass" if value <= threshold else ("Borderline" if value <= threshold*1.5 else "Needs work")
-    if kind in ["Partner Referrals"]:
-        return "Pass" if value >= threshold else ("Borderline" if value >= max(1, threshold-1) else "Needs work")
-    return "—"
+def tokens_remaining() -> int:
+    spent = S["round1"]["tokens_spent"] + S["round2"]["tokens_spent"] + S["round3"]["tokens_spent"]
+    return TOTAL_TOKENS - spent
 
-def synth_result(exp_key: str, ass_idx: int):
-    a = ASSUMPTIONS[ass_idx]
-    theme = a["theme"]
-    quality = a_quality(a["text"])
-    base = exp_gain(exp_key, theme)
-    steer = 1.15 if theme in TOP_THEMES else 1.0
-    signal = base * (0.6 + 0.4*quality) * steer
+def tokens_used_in_round(round_key:str) -> int:
+    return S[round_key]["tokens_spent"]
 
-    # Generate values appropriate to the metric and craft a snippet
-    if theme == "Fill Rate":
-        val = max(0.55, min(0.95, 0.65 + 0.35*signal + random.uniform(-0.05,0.05)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Measured average fill: **{val*100:.0f}%** (target ≥80%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Price Acceptance":
-        val = max(0.02, min(0.50, 0.05 + 0.45*signal + random.uniform(-0.03,0.03)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Pilot→paid conversion: **{val*100:.1f}%** (target ≥25%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Acquisition Cost":
-        val = max(15, min(120, 90 - 70*signal + random.uniform(-8,8)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Estimated CAC: **${val:.0f}** (target ≤$40). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Setup Time":
-        val = max(20, min(180, 130 - 90*signal + random.uniform(-10,10)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Time to complete setup: **{val:.0f} min** (target ≤60). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Owner Engagement":
-        val = max(0.30, min(0.95, 0.45 + 0.5*signal + random.uniform(-0.08,0.08)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Prompt action rate: **{val*100:.0f}%** (target ≥70%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Retention":
-        val = max(0.01, min(0.20, 0.15 - 0.12*signal + random.uniform(-0.02,0.02)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Projected monthly churn: **{val*100:.1f}%** (target ≤5%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Margin":
-        val = max(0.35, min(0.85, 0.45 + 0.45*signal + random.uniform(-0.05,0.05)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Estimated gross margin: **{val*100:.0f}%** (target ≥60%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Scale":
-        val = max(0.60, min(0.98, 0.75 + 0.25*signal + random.uniform(-0.06,0.04)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"On-time suggestions at 200 gyms: **{val*100:.0f}%** (target ≥90%). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Partner Referrals":
-        val = max(0, min(10, int(1 + 8*signal + random.uniform(-1,1))))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Positive partner replies: **{val}/10** (target ≥3). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Time-to-Value":
-        val = max(0, min(25, int(3 + 20*signal + random.uniform(-2,2))))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Extra bookings in 14 days: **{val}** (target ≥10). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Switching Friction":
-        val = max(5, min(120, 90 - 70*signal + random.uniform(-8,8)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Switch time: **{val:.0f} min** (target ≤30; no migrations). **Decision:** {band}."
-        return snippet, band, signal
-    if theme == "Staff Load":
-        val = max(0.5, min(8.0, 6.5 - 5.5*signal + random.uniform(-0.5,0.5)))
-        band = decide_band(theme, val, a["threshold"])
-        snippet = f"Ops time per gym: **{val:.1f} h/week** (target ≤3h). **Decision:** {band}."
-        return snippet, band, signal
+def add_pick(round_key:str, a_id:str, exp_name:str):
+    cost = EXPERIMENTS[exp_name]["cost"]
+    if round_key=="round1":
+        cap = ROUND1_TOKENS
+    else:
+        cap = tokens_remaining() + tokens_used_in_round(round_key)  # this round can use what's left
+    if tokens_used_in_round(round_key) + cost > cap:
+        return False, f"Not enough tokens in this round. Cost {cost}, available {cap - tokens_used_in_round(round_key)}."
+    S[round_key]["picked"].append((a_id, exp_name))
+    S[round_key]["tokens_spent"] += cost
+    return True, "Added."
 
-    return "Result captured.", "—", signal
+def run_round(round_key:str):
+    idea = get_idea()
+    for a_id, exp_name in S[round_key]["picked"]:
+        a = next(a for a in idea["assumptions"] if a["id"]==a_id)
+        S[round_key]["results"][a_id] = simulate_result(exp_name, a)
 
-# --------------------------------------------------------------------------------------
-# Scoring + explanations
-# --------------------------------------------------------------------------------------
-def compute_score_and_explanations():
-    # Risk prioritization: did Round 1 include top themes?
-    r1_themes = [ASSUMPTIONS[i["ass_idx"]]["theme"] for i in S["portfolio"][1]]
-    hits = len([t for t in r1_themes if t in TOP_THEMES])
-    prioritization = hits / max(1, len(S["portfolio"][1]))
+# ───────────────────────────────────────────────────────────────────────────────
+# SCORING
+# ───────────────────────────────────────────────────────────────────────────────
+def compute_scoring():
+    idea = get_idea()
+    if not idea: return
+    # Map truth for prioritization checks
+    truth_map = {a["id"]:a["truth"] for a in idea["assumptions"]}
+    tags_map  = {a["id"]:a["tags"]  for a in idea["assumptions"]}
 
-    # Experiment fit: average exp->theme gain across all runs
-    fits = []
-    for rnd in [1,2,3]:
-        for it in S["portfolio"][rnd]:
-            theme = ASSUMPTIONS[it["ass_idx"]]["theme"]
-            fits.append(exp_gain(it["exp_key"], theme))
-    exp_fit = sum(fits)/len(fits) if fits else 0.0
+    # Assumption Clarity: these are pre-written testable; give base, add for breadth
+    clarity = 0.8
+    # If user interacted with at least 5 distinct assumptions across rounds, bump
+    tested_ids = set([a for a,_ in S["round1"]["picked"]] + [a for a,_ in S["round2"]["picked"]] + [a for a,_ in S["round3"]["picked"]])
+    if len(tested_ids) >= 4: clarity += 0.1
+    clarity = clamp(clarity, 0, 1)
+    clarity_score = int(100*clarity)
 
-    # Resource efficiency: start scrappy and iterate
-    costs = []
-    for rnd in [1,2,3]:
-        c = 0
-        for it in S["portfolio"][rnd]:
-            c += next(e for e in EXPERIMENTS if e["key"]==it["exp_key"])["cost"]
-        costs.append(c)
-    resource = 1.0
-    if costs and costs[0] > 6: resource -= 0.2
-    if len(S["portfolio"][2]) == 0: resource -= 0.2
-    resource = max(0.0, resource)
+    # Risk Prioritization: reward picking H risks in R1, then M
+    r1_ids = [a for a,_ in S["round1"]["picked"]]
+    r2_ids = [a for a,_ in S["round2"]["picked"]]
+    r3_ids = [a for a,_ in S["round3"]["picked"]]
+    def weight(t): return {"H":1.0,"M":0.6,"L":0.2}[t]
+    r1 = sum(weight(truth_map[i]) for i in r1_ids) / max(1, len(r1_ids))
+    r2 = sum(weight(truth_map[i]) for i in r2_ids) / max(1, len(r2_ids))
+    prioritization = clamp(0.65*r1 + 0.35*r2, 0, 1)
+    prioritization_score = int(100*prioritization)
 
-    # Learning outcome: themes with learning > 0.55
-    learned = sum(1 for v in S["learning"].values() if v > 0.55)
-    learning = learned / max(1, len(S["learning"]) or 1)
+    # Experiment Fit: average fit of selected pairs
+    def avg_fit(picks):
+        if not picks: return 0
+        vals = []
+        for a_id, exp in picks:
+            vals.append(fit_score(exp, tags_map[a_id]))
+        return sum(vals)/len(vals)
+    fit_avg = clamp(0.5*avg_fit(S["round1"]["picked"]) + 0.5*avg_fit(S["round2"]["picked"] + S["round3"]["picked"]), 0, 1)
+    fit_score_val = int(100*fit_avg)
 
-    # Assumption quality: specificity of the 3 chosen
-    aq = sum(a_quality(ASSUMPTIONS[i]["text"]) for i in S["chosen_idx"])/max(1, len(S["chosen_idx"]) or 1)
+    # Resource Efficiency: tokens spent <= TOTAL, diversity, and some carryover before R3
+    spent_total = S["round1"]["tokens_spent"] + S["round2"]["tokens_spent"] + S["round3"]["tokens_spent"]
+    diversity = len(set(exp for _,exp in S["round1"]["picked"] + S["round2"]["picked"] + S["round3"]["picked"]))
+    eff = 0.0
+    if spent_total <= TOTAL_TOKENS: eff += 0.6
+    if diversity >= 3: eff += 0.25
+    if S["round3"]["picked"] and tokens_remaining() >= 0: eff += 0.15
+    eff = clamp(eff, 0, 1)
+    efficiency_score = int(100*eff)
 
-    total = round(100*(0.28*prioritization + 0.27*exp_fit + 0.20*resource + 0.15*learning + 0.10*aq))
+    # Learning Outcome: did they update statuses consistent with results bias?
+    def status_points(rd):
+        pts = 0; n=0
+        for a_id, _ in S[rd]["picked"]:
+            res = S[rd]["results"].get(a_id, {})
+            stt = S[rd]["statuses"].get(a_id, "")
+            if not res or not stt: continue
+            n+=1
+            if res["verdict"]=="positive" and stt in ["Validated","Weakened"]:
+                pts+=1
+            elif res["verdict"]=="negative" and stt in ["Invalidated","Still Risky"]:
+                pts+=1
+            elif res["verdict"]=="mixed" and stt in ["Weakened","Still Risky"]:
+                pts+=1
+            elif res["verdict"]=="weak" and stt in ["Still Risky"]:
+                pts+=1
+        return (pts/max(1,n))
+    learn = clamp(0.6*status_points("round1") + 0.4*status_points("round2"), 0, 1)
+    if S["round3"]["picked"]:
+        learn = clamp(0.5*status_points("round2") + 0.5*status_points("round3"), 0, 1)
+    learning_score = int(100*learn)
+
+    total = int(0.30*clarity_score + 0.25*prioritization_score + 0.25*fit_score_val + 0.10*efficiency_score + 0.10*learning_score)
+
     S["score"] = {
         "total": total,
-        "components":{
-            "Risk Prioritization": round(prioritization,2),
-            "Experiment Fit": round(exp_fit,2),
-            "Resource Efficiency": round(resource,2),
-            "Learning Outcome": round(learning,2),
-            "Assumption Quality": round(aq,2),
+        "components": {
+            "Assumption Clarity": clarity_score,
+            "Risk Prioritization": prioritization_score,
+            "Experiment Fit": fit_score_val,
+            "Resource Efficiency": efficiency_score,
+            "Learning Outcome": learning_score
         }
     }
 
-    # Build explanations (why each score looks the way it does)
-    expl = {}
-    # Risk Prioritization
-    if hits >= 2:
-        expl["Risk Prioritization"] = (
-            f"You tested {hits} of the 3 highest-risk themes in Round 1 "
-            f"({', '.join(sorted(TOP_THEMES))}). That’s strong prioritization."
-        )
-    elif hits == 1:
-        expl["Risk Prioritization"] = (
-            f"You hit 1 of the top 3 risks in Round 1. Consider swapping in another top risk earlier."
-        )
-    else:
-        expl["Risk Prioritization"] = (
-            "Round 1 missed the riskiest themes. Start with the few uncertainties that could kill the idea."
-        )
+    # Coaching (actionable)
+    notes = {}
+    if prioritization < 0.65:
+        notes["Risk Prioritization"] = "Address the highest-risk assumptions first. In Round 1, prefer items marked as hardest to satisfy (e.g., install time ≤ 20 min)."
+    if fit_avg < 0.65:
+        notes["Experiment Fit"] = "Match tests to risks: pricing/intent → Landing or Pre-order; feasibility (install/compat/noise) → Prototype Demo; ROI/callbacks → Data Comparison or Concierge."
+    if eff < 0.7:
+        notes["Resource Efficiency"] = "Aim for 2–3 distinct experiment types and keep total spend ≤ token cap. Avoid repeating the same signal twice."
+    if learning_score < 0.7:
+        notes["Learning Outcome"] = "Translate results to decisions: mark validated/invalidated and pick a next test that targets what remains uncertain."
 
-    # Experiment Fit
-    if exp_fit >= 0.7:
-        expl["Experiment Fit"] = (
-            "Your chosen tests typically yield strong signals for the themes you targeted—good matching."
-        )
-    elif exp_fit >= 0.5:
-        expl["Experiment Fit"] = (
-            "Fit was mixed. Some choices were solid; others could be replaced by formats that produce clearer signals."
-        )
-    else:
-        expl["Experiment Fit"] = (
-            "Low fit. Re-map each assumption to a test that directly demonstrates the behavior you care about."
-        )
+    S["coaching"] = notes
 
-    # Resource Efficiency
-    r1 = costs[0] if costs else 0
-    ran_r2 = len(S["portfolio"][2]) > 0
-    if resource >= 0.9:
-        expl["Resource Efficiency"] = (
-            f"Good pacing. Round 1 spent {r1} tokens and you left room to iterate (Round 2 {'ran' if ran_r2 else 'did not run'})."
-        )
-    else:
-        msg = []
-        if r1 > 6: msg.append(f"Round 1 was heavy at {r1} tokens")
-        if not ran_r2: msg.append("no Round 2 experiments")
-        expl["Resource Efficiency"] = " and ".join(msg) or "Token use can be lighter in Round 1."
-
-    # Learning Outcome
-    if learning >= 0.7:
-        expl["Learning Outcome"] = (
-            f"You built strong learning in multiple themes (≥0.55 coverage). Nice breadth without losing depth."
-        )
-    elif learning >= 0.4:
-        expl["Learning Outcome"] = (
-            "Some themes reached clear learning; consider extending to the next most critical area."
-        )
-    else:
-        expl["Learning Outcome"] = (
-            "Few themes crossed the confidence bar. Consider lower-cost tests to widen coverage sooner."
-        )
-
-    # Assumption Quality
-    if aq >= 0.75:
-        expl["Assumption Quality"] = (
-            "Your assumptions were specific and measurable—easy to call with data."
-        )
-    elif aq >= 0.55:
-        expl["Assumption Quality"] = (
-            "Assumptions were partially specific. Add thresholds (%, counts, time) to sharpen decisions."
-        )
-    else:
-        expl["Assumption Quality"] = (
-            "Assumptions were broad. Rephrase to observable behaviors with explicit thresholds."
-        )
-
-    S["explanations"] = expl
-
-# --------------------------------------------------------------------------------------
-# UI Blocks
-# --------------------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────────────────────────
+# UI PAGES
+# ───────────────────────────────────────────────────────────────────────────────
 def header():
     st.title(TITLE)
-    st.caption("Pick the riskiest assumptions, run scrappy experiments, and make clear calls using simple yardsticks.")
+    st.caption(SUB)
+    stage_bar()
+    st.progress((STAGES.index(S["stage"])+1)/len(STAGES))
+    st.divider()
 
-def block_intro():
-    st.subheader("What you’ll do")
+def page_intro():
+    st.subheader("First you will…")
     st.markdown("""
-**First you will** pick **three** assumptions (from twelve) that feel riskiest for a typical gym owner.  
-**Then you will** choose low-cost experiments (with tokens) and **run Round 1**.  
-**Next you will** review results with **Pass / Borderline / Needs work** calls and decide Round 2 (and optional Round 3).  
-**Finally you will** get a score, reasons for each component, and coaching notes.
-
-Time guide: ~45–60 minutes total.
+1) Choose a direction (**Idea Card**) with pre-listed assumptions.  
+2) **Round 1:** Pick **1–2 riskiest assumptions** and a scrappy **experiment** for each (≤ 6 tokens).  
+3) Review **results** and update **risk statuses**.  
+4) **Round 2:** See all assumptions again; pick **2–3** more tests within remaining tokens (**8 total**).  
+5) Optional **Round 3** appears if you still have ≥ 2 tokens.  
+6) Complete a short **Learning Summary** → **Score & coaching**.
 """)
-    if st.button("Start", key="start"):
-        S["stage"] = "pick"; st.rerun()
+    if st.button("Start"):
+        S["stage"]="idea"; st.rerun()
 
-def block_pick():
-    st.subheader("Pick your top three assumptions to test")
-    st.info(f"Seed idea: **{SEED_IDEA['name']}** — {SEED_IDEA['sketch']}")
-    st.markdown("_Click exactly three boxes below._")
-
+def page_idea():
+    st.subheader("Choose your idea card")
     cols = st.columns(3)
-    chosen = []
-    for i, a in enumerate(ASSUMPTIONS):
-        with cols[i%3]:
-            st.checkbox(
-                f"**{a['text']}**  \n_{a['theme']}_  \n• Metric: {a['metric']}",
-                key=f"a_{i}"
-            )
-            if st.session_state.get(f"a_{i}"):
-                chosen.append(i)
+    keys = list(IDEA_CARDS.keys())
+    for i,k in enumerate(keys):
+        with cols[i]:
+            st.markdown(f"**{k}**")
+            st.caption(IDEA_CARDS[k]["desc"])
+            df = pd.DataFrame([{"Assumption":a["text"]} for a in IDEA_CARDS[k]["assumptions"]])
+            st.dataframe(df, use_container_width=True, hide_index=True, height=min(300, 40*len(df)+30))
+            if st.button(f"Work on this", key=f"pick_{k}"):
+                S["idea_key"]=k
+                # reset statuses
+                S["assumption_status"] = {a["id"]:"Unassessed" for a in IDEA_CARDS[k]["assumptions"]}
+                S["stage"]="r1_select"; st.rerun()
 
-    st.write(f"Selected: **{len(chosen)}/3**")
-    if len(chosen) != 3:
-        st.warning("Please select exactly three assumptions.")
+def render_round_selector(round_key:str, max_picks:int, note:str, token_cap:int):
+    st.markdown(f"**Token cap for this round:** {token_cap}")
+    idea = get_idea()
+    assumps = idea["assumptions"]
+    df = assumptions_df(S["idea_key"])
+    st.dataframe(df, use_container_width=True, hide_index=True, height=min(400, 40*len(df)+30))
+    st.info(note)
+
+    # Selection UI
+    available_ids = [a["id"] for a in assumps]
+    picks_local: List[Tuple[str,str]] = S[round_key]["picked"][:]
+    cost_spent = S[round_key]["tokens_spent"]
+
+    # Add pickers
+    c1,c2,c3 = st.columns([2,2,1])
+    with c1:
+        a_id = st.selectbox("Assumption", options=available_ids, format_func=lambda i: next(a["text"] for a in assumps if a["id"]==i))
+    with c2:
+        exp_name = st.selectbox("Experiment", options=list(EXPERIMENTS.keys()), format_func=lambda x: f"{x} (cost {EXPERIMENTS[x]['cost']})")
+    with c3:
+        if st.button("Add"):
+            if (a_id, exp_name) in picks_local:
+                st.warning("Already added.")
+            elif len(picks_local) >= max_picks:
+                st.warning(f"Limit reached: {max_picks} picks this round.")
+            else:
+                ok,msg = add_pick(round_key, a_id, exp_name)
+                if ok:
+                    st.success("Added.")
+                else:
+                    st.warning(msg)
+                st.rerun()
+
+    # Show current portfolio
+    st.markdown("**Selected this round**")
+    if S[round_key]["picked"]:
+        for a_id, exp in S[round_key]["picked"]:
+            st.write(f"- {a_id}: {next(a['text'] for a in assumps if a['id']==a_id)}  \n  _{exp} • cost {EXPERIMENTS[exp]['cost']} • fit ~{int(100*fit_score(exp, next(a['tags'] for a in assumps if a['id']==a_id)))}%_")
     else:
-        if st.button("Confirm & go to Round 1", key="to_r1"):
-            S["chosen_idx"] = chosen
-            S["stage"] = "round1"
-            S["round"] = 1
-            S["tokens"] = 8
-            st.rerun()
+        st.caption("Nothing selected yet.")
+    st.metric("Tokens spent", f"{S[round_key]['tokens_spent']}/{token_cap}")
 
-# ---- Experiment card renderer (general wording, non-leading) -------------------------
-def render_exp_card(exp, round_idx, ass_idx):
-    with st.container(border=True):
-        st.markdown(f"**{exp['name']}**  \n_{exp['speed']} • cost {exp['cost']} tokens_")
-        st.markdown(
-            f"**What it is:** {exp['do']}  \n"
-            f"**Signals you’ll see:** {exp['measure']}  \n"
-            f"**How to judge:** {exp['decide']}"
-        )
-        if st.button(f"Add — cost {exp['cost']}", key=f"btn_{round_idx}_{ass_idx}_{exp['key']}"):
-            add_to_portfolio(round_idx, ass_idx, exp['key'])
+def page_r1_select():
+    st.subheader("Round 1 — choose your riskiest assumptions & tests")
+    render_round_selector("round1", max_picks=2, note="Pick 1–2 riskiest items and match a test that best reduces uncertainty.", token_cap=ROUND1_TOKENS)
+    c1,c2 = st.columns(2)
+    if c1.button("Back"):
+        S["stage"]="idea"; st.rerun()
+    if c2.button("Run Round 1"):
+        if len(S["round1"]["picked"])<1:
+            st.warning("Pick at least one assumption to test.")
+        else:
+            run_round("round1")
+            S["stage"]="r1_results"; st.rerun()
 
-def block_round(round_idx:int):
-    st.subheader(f"Round {round_idx}: pick a portfolio of experiments")
-    st.write(f"Tokens available: **{S['tokens']}**")
+def render_round_results(round_key:str):
+    st.markdown("**Results**")
+    idea = get_idea()
+    for a_id, exp in S[round_key]["picked"]:
+        a = next(a for a in idea["assumptions"] if a["id"]==a_id)
+        res = S[round_key]["results"][a_id]
+        with st.container(border=True):
+            st.write(f"**{a_id} — {a['text']}**")
+            st.caption(f"Experiment: {exp} • cost {EXPERIMENTS[exp]['cost']}")
+            st.write(f"**Data:** {res['metric']}")
+            st.caption(res["note"])
+            # status selector
+            st.selectbox("Mark status", ["Validated","Weakened","Still Risky","Invalidated"],
+                         key=f"status_{round_key}_{a_id}",
+                         index=["Validated","Weakened","Still Risky","Invalidated"].index(S[round_key]["statuses"].get(a_id, "Still Risky")))
+            S[round_key]["statuses"][a_id] = st.session_state[f"status_{round_key}_{a_id}"]
 
-    for ass_idx in S["chosen_idx"]:
-        a = ASSUMPTIONS[ass_idx]
-        with st.expander(f"{a['text']}  —  _{a['theme']}_  | Metric: {a['metric']}", expanded=False):
-            cols = st.columns(3)
-            for j, exp in enumerate(EXPERIMENTS):
-                with cols[j % 3]:
-                    render_exp_card(exp, round_idx, ass_idx)
+    # propagate latest statuses to global
+    for a_id, stt in S[round_key]["statuses"].items():
+        S["assumption_status"][a_id] = stt
 
-    if S["portfolio"][round_idx]:
-        st.markdown("#### Selected this round")
-        for n, it in enumerate(S["portfolio"][round_idx], start=1):
-            a = ASSUMPTIONS[it["ass_idx"]]
-            e = next(e for e in EXPERIMENTS if e["key"]==it["exp_key"])
-            st.write(f"{n}. **{a['text']}** → **{e['name']}** (cost {e['cost']})")
+def page_r1_results():
+    st.subheader("Round 1 — results & status updates")
+    render_round_results("round1")
+    c1,c2 = st.columns(2)
+    if c1.button("Back to selection"):
+        S["stage"]="r1_select"; st.rerun()
+    if c2.button("Proceed to Round 2"):
+        S["stage"]="r2_select"; st.rerun()
 
-    left, right = st.columns(2)
-    left.button("Run experiments",
-                disabled=(len(S["portfolio"][round_idx])==0),
-                key=f"run_{round_idx}",
-                on_click=lambda: run_round(round_idx))
-    if round_idx > 1:
-        right.button("Skip to scoring", key=f"skip_{round_idx}", on_click=lambda: to_score())
+def page_r2_select():
+    st.subheader("Round 2 — pick next tests")
+    rem = tokens_remaining()
+    token_cap_for_round = rem + S["round2"]["tokens_spent"]
+    render_round_selector("round2", max_picks=3, note="Choose 2–3 items (including unresolved from Round 1). You have 8 total tokens across rounds.", token_cap=token_cap_for_round)
+    if tokens_remaining() >= 2:
+        st.caption("If ≥ 2 tokens remain after Round 2, Round 3 will unlock.")
+    c1,c2 = st.columns(2)
+    if c1.button("Back to Round 1 results"):
+        S["stage"]="r1_results"; st.rerun()
+    if c2.button("Run Round 2"):
+        if len(S["round2"]["picked"])<1:
+            st.warning("Pick at least one assumption to test.")
+        else:
+            run_round("round2")
+            S["stage"]="r2_results"; st.rerun()
 
-def add_to_portfolio(round_idx:int, ass_idx:int, exp_key:str):
-    exp = next(e for e in EXPERIMENTS if e["key"]==exp_key)
-    if exp["cost"] > S["tokens"]:
-        st.toast("Not enough tokens for that experiment.", icon="⚠️")
+def page_r2_results():
+    st.subheader("Round 2 — results & status updates")
+    render_round_results("round2")
+    c1,c2,c3 = st.columns(3)
+    # Round 3 unlock check
+    if tokens_remaining() >= 2:
+        if c1.button("Proceed to Round 3"):
+            S["stage"]="r3_select"; st.rerun()
+    if c2.button("Back to Round 2 selection"):
+        S["stage"]="r2_select"; st.rerun()
+    if c3.button("Skip to Learning Summary"):
+        S["stage"]="summary"; st.rerun()
+
+def page_r3_select():
+    st.subheader("Round 3 — optional big bet")
+    rem = tokens_remaining()
+    if rem < 2:
+        st.info("Not enough tokens for Round 3. Move to Learning Summary.")
+    token_cap_for_round = rem + S["round3"]["tokens_spent"]
+    render_round_selector("round3", max_picks=1, note="Choose one high-impact test if you have ≥ 2 tokens remaining.", token_cap=token_cap_for_round)
+    c1,c2 = st.columns(2)
+    if c1.button("Back to Round 2 results"):
+        S["stage"]="r2_results"; st.rerun()
+    if c2.button("Run Round 3"):
+        if len(S["round3"]["picked"])<1:
+            st.warning("Pick an item or go back.")
+        else:
+            run_round("round3")
+            S["stage"]="r3_results"; st.rerun()
+
+def page_r3_results():
+    st.subheader("Round 3 — results & status updates")
+    render_round_results("round3")
+    c1,c2 = st.columns(2)
+    if c1.button("Back to Round 3 selection"):
+        S["stage"]="r3_select"; st.rerun()
+    if c2.button("Proceed to Learning Summary"):
+        S["stage"]="summary"; st.rerun()
+
+def page_summary():
+    st.subheader("Learning summary & next steps")
+    idea = get_idea()
+    ids = [a["id"] for a in idea["assumptions"]]
+    texts = {a["id"]:a["text"] for a in idea["assumptions"]}
+    # structured fields
+    c1,c2 = st.columns(2)
+    with c1:
+        S["learning"]["most_reduced"] = st.selectbox("Top risk you reduced", options=["—"]+ids,
+                                                     format_func=lambda i: ("—" if i=="—" else f"{i}: {texts[i]}"),
+                                                     index=0 if not S["learning"]["most_reduced"] else (["—"]+ids).index(S["learning"]["most_reduced"]))
+        S["learning"]["remaining"] = st.selectbox("Most important remaining risk", options=["—"]+ids,
+                                                  format_func=lambda i: ("—" if i=="—" else f"{i}: {texts[i]}"),
+                                                  index=0 if not S["learning"]["remaining"] else (["—"]+ids).index(S["learning"]["remaining"]))
+    with c2:
+        S["learning"]["next_test"] = st.selectbox("Next real-world test you’d run", options=list(EXPERIMENTS.keys()),
+                                                  index=0 if not S["learning"]["next_test"] else list(EXPERIMENTS.keys()).index(S["learning"]["next_test"]))
+        S["learning"]["success_metric"] = st.text_input("Success metric / threshold (e.g., ≥ 4% signups, ≥ 2 cards, Δ ≥ 2°F)", value=S["learning"]["success_metric"])
+
+    S["learning"]["evidence"] = st.text_area("Evidence summary (one or two sentences)", value=S["learning"]["evidence"], height=80)
+
+    # simple heatmap-like table
+    st.markdown("#### Assumptions & current status")
+    df = assumptions_df(S["idea_key"])
+    st.dataframe(df, use_container_width=True, hide_index=True, height=min(400, 40*len(df)+30))
+
+    if st.button("Submit & score"):
+        compute_scoring()
+        S["stage"]="score"; st.rerun()
+
+def page_score():
+    st.subheader("Feedback & score")
+    sc = S["score"]
+    if not sc:
+        st.warning("No score yet.")
         return
-    S["tokens"] -= exp["cost"]
-    S["portfolio"][round_idx].append({"ass_idx": ass_idx, "exp_key": exp_key})
-    st.rerun()
-
-def run_round(round_idx:int):
-    S["results"][round_idx] = []
-    for it in S["portfolio"][round_idx]:
-        snippet, band, signal = synth_result(it["exp_key"], it["ass_idx"])
-        S["results"][round_idx].append({**it, "snippet":snippet, "pass_band":band, "signal":signal})
-        theme = ASSUMPTIONS[it["ass_idx"]]["theme"]
-        add_learning(theme, signal)
-    S["stage"] = f"results{round_idx}"
-    st.rerun()
-
-def block_results(round_idx:int):
-    st.subheader(f"Round {round_idx} results")
-    for r in S["results"][round_idx]:
-        a = ASSUMPTIONS[r["ass_idx"]]
-        e = next(e for e in EXPERIMENTS if e["key"]==r["exp_key"])
-        color = "🟢" if r["pass_band"]=="Pass" else ("🟠" if r["pass_band"]=="Borderline" else "🔴")
-        st.success(f"{color} **{a['theme']}** — {e['name']}  \n{r['snippet']}")
-
-    st.markdown("#### Learning coverage (by theme)")
-    if S["learning"]:
-        for k,v in S["learning"].items():
-            st.write(f"- {k}: {v:.2f}")
-    else:
-        st.write("No learning recorded yet.")
-
-    left, right = st.columns(2)
-    if round_idx == 1:
-        left.button("Plan Round 2", key="to_r2",
-                    on_click=lambda: go_round(2, tokens=6))
-        right.button("Skip to scoring", key="skip1", on_click=lambda: to_score())
-    elif round_idx == 2:
-        left.button("Plan Round 3 (optional)", key="to_r3",
-                    on_click=lambda: go_round(3, tokens=4))
-        right.button("Skip to scoring", key="skip2", on_click=lambda: to_score())
-    else:
-        left.button("Compute score", key="to_score", on_click=lambda: to_score())
-
-def go_round(idx:int, tokens:int):
-    S["stage"] = f"round{idx}"
-    S["round"] = idx
-    S["tokens"] = tokens
-    st.rerun()
-
-def to_score():
-    S["stage"] = "score"
-    compute_score_and_explanations()
-    st.rerun()
-
-def block_score():
-    if S["score"] is None:
-        compute_score_and_explanations()
-    st.subheader("Score and coaching")
-    st.metric("Total Score", f"{S['score']['total']}/100")
-
-    st.markdown("#### Category scores (with reasons)")
-    for k,v in S["score"]["components"].items():
-        label = "Excellent" if v>=0.8 else ("Good" if v>=0.6 else "Needs work")
-        st.write(f"- **{k}:** {int(v*100)}/100 — {label}")
-        st.caption(S["explanations"].get(k,""))
+    st.metric("Total", f"{sc['total']}/100")
+    st.markdown("#### Components")
+    for k,v in sc["components"].items():
+        label = "Excellent" if v>=80 else "Good" if v>=60 else "Needs work"
+        st.write(f"- **{k}:** {v}/100 — {label}")
 
     st.markdown("#### Coaching notes")
-    st.write("**1) Start with the few uncertainties that could kill the idea.** Make Round 1 a bet on those, not on nice-to-know items.")
-    st.write("**2) Match the format to the decision.** If you need real purchase intent, use a commitment test; if you need behavioral proof, use a short manual trial; if you need message clarity, split test your message.")
-    st.write("**3) Decide with thresholds, not vibes.** Set pass/borderline/fail bars up front (%, counts, time). Call the result and state the next step.")
-    st.write("**4) Spend lightly to earn iteration.** Use inexpensive tests first so you can pivot or double-down in Round 2 without running out of tokens.")
-    st.write("**5) Capture a specific next test.** Every result should end with a clear follow-up (format, metric, threshold, and what you’ll do in each outcome).")
+    if S["coaching"]:
+        for k,v in S["coaching"].items():
+            st.write(f"- **{k}:** {v}")
+    else:
+        st.write("Solid choices and sequencing. Keep going!")
 
-    if st.button("Restart simulation", key="restart"):
+    st.markdown("#### Your selections recap")
+    idea = get_idea()
+    texts = {a["id"]:a["text"] for a in idea["assumptions"]}
+    def list_round(rd):
+        if not S[rd]["picked"]:
+            return "—"
+        return "\n".join([f"- {a_id}: {texts[a_id]}  \n  _{exp}_ → **{S[rd]['results'].get(a_id,{}).get('metric','')}** ({S[rd]['results'].get(a_id,{}).get('verdict','')}) • Status: {S[rd]['statuses'].get(a_id,'—')}" for a_id,exp in S[rd]["picked"]])
+    with st.expander("Round 1"):
+        st.markdown(list_round("round1"))
+    with st.expander("Round 2"):
+        st.markdown(list_round("round2"))
+    if S["round3"]["picked"]:
+        with st.expander("Round 3"):
+            st.markdown(list_round("round3"))
+
+    st.markdown("#### Learning summary you entered")
+    L=S["learning"]
+    st.write(f"- **Reduced risk:** {L['most_reduced'] or '—'}")
+    st.write(f"- **Remaining risk:** {L['remaining'] or '—'}")
+    st.write(f"- **Next test:** {L['next_test'] or '—'}  • **Success metric:** {L['success_metric'] or '—'}")
+    if L["evidence"]:
+        st.caption(f"Evidence: {L['evidence']}")
+
+    c1,c2 = st.columns(2)
+    if c1.button("Restart Simulation"):
         init_state(); st.rerun()
+    if c2.button("Back to Learning Summary"):
+        S["stage"]="summary"; st.rerun()
 
-# --------------------------------------------------------------------------------------
-# Flow
-# --------------------------------------------------------------------------------------
+# ───────────────────────────────────────────────────────────────────────────────
+# ROUTER
+# ───────────────────────────────────────────────────────────────────────────────
 def main():
     header()
-    stage = S["stage"]
-    if stage == "intro":
-        block_intro()
-    elif stage == "pick":
-        block_pick()
-    elif stage == "round1":
-        block_round(1)
-    elif stage == "results1":
-        block_results(1)
-    elif stage == "round2":
-        block_round(2)
-    elif stage == "results2":
-        block_results(2)
-    elif stage == "round3":
-        block_round(3)
-    elif stage == "results3":
-        block_results(3)
-    else:
-        block_score()
+    if   S["stage"]=="intro":       page_intro()
+    elif S["stage"]=="idea":        page_idea()
+    elif S["stage"]=="r1_select":   page_r1_select()
+    elif S["stage"]=="r1_results":  page_r1_results()
+    elif S["stage"]=="r2_select":   page_r2_select()
+    elif S["stage"]=="r2_results":  page_r2_results()
+    elif S["stage"]=="r3_select":   page_r3_select()
+    elif S["stage"]=="r3_results":  page_r3_results()
+    elif S["stage"]=="summary":     page_summary()
+    else:                           page_score()
 
 main()
