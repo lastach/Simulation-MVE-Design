@@ -1,548 +1,520 @@
-# ============================================================================
-# Simulation #2 — ThermaLoop: Designing & Running Early Experiments
-# ----------------------------------------------------------------------------
-# No external UI deps (no drag-and-drop). Ranking is handled by Up/Down buttons.
-# 3 rounds, token budgets, experiment cards with descriptions, semi-random
-# outcomes biased by a hidden risk map, and detailed scoring reasons.
-# ============================================================================
-
-from __future__ import annotations
-
 import random
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+import math
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Tuple
 import pandas as pd
 import streamlit as st
 
-# -----------------------------------------------------------------------------
-# Streamlit config
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="Simulation #2 — ThermaLoop", page_icon="🧪", layout="wide")
+# ----------------------------------------
+# Page config
+# ----------------------------------------
+st.set_page_config(
+    page_title="Simulation #2 — Designing & Running Early Experiments",
+    page_icon="🧪",
+    layout="wide"
+)
 
-# -----------------------------------------------------------------------------
-# Constants & Data
-# -----------------------------------------------------------------------------
-ROUND_BUDGET = {"r1": 12, "r2": 10, "r3": 8}  # token budgets per round
+# ----------------------------------------
+# Utility
+# ----------------------------------------
+def _ss(key: str, default):
+    if key not in st.session_state:
+        st.session_state[key] = default
+    return st.session_state[key]
 
-@dataclass
-class Experiment:
-    """A scrappy test option."""
-    name: str
-    cost: int
-    description: str
-    tags_for_fit: List[str]
-    strength: int  # 1..3 relative confidence gain
-
-EXPERIMENTS: List[Experiment] = [
-    Experiment(
-        "Landing Page Test", 3,
-        "Publish a simple page with a clear promise; send small traffic to measure click-through and signups.",
-        ["desirability"], 2
-    ),
-    Experiment(
-        "Smoke Test (Reserve Now)", 4,
-        "Offer a ‘Reserve’ or ‘Join Waitlist’ CTA with light friction to test real intent.",
-        ["desirability", "viability"], 3
-    ),
-    Experiment(
-        "Concierge Trial", 4,
-        "Manually deliver the value for a few users (no code) and observe outcomes and willingness to continue.",
-        ["desirability", "feasibility"], 2
-    ),
-    Experiment(
-        "Wizard-of-Oz Prototype", 4,
-        "Fake the backend but keep the real UI; validate that the flow/output meets expectations.",
-        ["feasibility", "desirability"], 2
-    ),
-    Experiment(
-        "Pre-Order Test", 4,
-        "Collect card-on-file or deposits (refundable) to measure true willingness to pay.",
-        ["viability", "desirability"], 3
-    ),
-    Experiment(
-        "Ad Split Test", 3,
-        "Run tiny-budget ads with different messages to see what attracts attention from your segment.",
-        ["desirability"], 1
-    ),
-    Experiment(
-        "Expert Interview", 2,
-        "Short calls with domain experts to surface blockers (compliance, installation, supply-chain).",
-        ["feasibility", "viability"], 1
-    ),
-    Experiment(
-        "Diary / Usage Log", 3,
-        "Have users log behaviors for 1–2 weeks; discover triggers, frequency and sticking points.",
-        ["desirability"], 2
-    ),
-]
-
-# --- Idea cards & hidden risk maps (0..1; higher = riskier/less likely to succeed) ---
-IDEA_CARDS: Dict[str, Dict] = {
-    "homeowners": {
-        "title": "Homeowner: Comfort & Energy",
-        "assumptions": [
-            ("Main motivation is saving money, not comfort.", "desirability"),
-            ("Homeowners will try a 14-day free trial.", "desirability"),
-            ("Self-install can be done in under 45 minutes.", "feasibility"),
-            ("Users will allow data collection from the thermostat.", "viability"),
-            ("Monthly price under $9 is acceptable.", "viability"),
-            ("Comfort improvement is noticeable within 7 days.", "desirability"),
-            ("Mobile notifications drive weekly action.", "desirability"),
-            ("Household members will not object to auto-scheduling.", "desirability"),
-            ("Data privacy copy is sufficient to build trust.", "viability"),
-            ("Geofencing works reliably across devices.", "feasibility"),
-        ],
-        "risk_truth": [0.8, 0.7, 0.6, 0.55, 0.7, 0.5, 0.45, 0.6, 0.6, 0.5],
-    },
-    "landlords": {
-        "title": "Small Landlords: Portfolio Savings",
-        "assumptions": [
-            ("Property managers will share thermostat data per unit.", "viability"),
-            ("Premium $49/month tier is viable.", "viability"),
-            ("Main value is fewer maintenance visits (not energy).", "desirability"),
-            ("80% activation within two weeks is achievable.", "feasibility"),
-            ("Tenants will not disable automations.", "desirability"),
-            ("PM partnerships can drive warm leads.", "desirability"),
-            ("Bulk onboarding tools reduce setup time by 50%.", "feasibility"),
-            ("Annual contracts with 30-day pilot are acceptable.", "viability"),
-        ],
-        "risk_truth": [0.7, 0.62, 0.7, 0.5, 0.6, 0.5, 0.5, 0.58],
-    },
-    "installers": {
-        "title": "HVAC Installers: Smart Upsell",
-        "assumptions": [
-            ("Installers accept a 20% revenue share.", "viability"),
-            ("Techs can demo the app in under 5 minutes on site.", "feasibility"),
-            ("Customers approve data collection at install time.", "viability"),
-            ("Comfort-focused pitch converts better than savings-first.", "desirability"),
-            ("Lead routing from installer CRM is feasible without deep integration.", "feasibility"),
-            ("Post-install follow-ups lift attach rate by 30%.", "desirability"),
-            ("No-code internal tool is enough for scheduling and support.", "feasibility"),
-        ],
-        "risk_truth": [0.6, 0.5, 0.62, 0.6, 0.5, 0.5, 0.4],
-    },
-}
-
-# -----------------------------------------------------------------------------
-# State init
-# -----------------------------------------------------------------------------
-def init_state():
-    if "stage" in st.session_state:
+def init_once():
+    if _ss("initialized", False):
         return
-    st.session_state.stage = "intro"
-    st.session_state.idea_key = None
-    st.session_state.rank_order: List[int] = []  # indices of assumptions
-    st.session_state.tokens = dict(ROUND_BUDGET)
-    st.session_state.portfolio = {"r1": [], "r2": [], "r3": []}  # planned tests per round
-    st.session_state.results = {"r1": [], "r2": [], "r3": []}    # outcomes per round
-    st.session_state.scoring = {}
-    st.session_state.log = []
+    # Stages:
+    # 0: Intro
+    # 1: Choose Idea
+    # 2: Rank Risks
+    # 3: Round 1 - Select
+    # 4: Round 1 - Results
+    # 5: Round 2 - Select
+    # 6: Round 2 - Results
+    # 7: Round 3 - Select
+    # 8: Round 3 - Results
+    # 9: Learning Summary
+    # 10: Feedback & Score
+    st.session_state.stage = 0
+    st.session_state.idea_idx = None
 
-def goto(stage: str):
-    st.session_state.stage = stage
-    st.experimental_rerun()
+    # Budgets per round
+    st.session_state.round_budgets = {1: 10, 2: 8, 3: 6}
 
-def header(active_idx: int):
-    """A simple progress header; disabled buttons act as breadcrumbs."""
-    steps = [
+    # Experiments master list (cost, speed, description and the bucket it mainly hits)
+    # Buckets used internally to recommend: desirability / feasibility / viability
+    st.session_state.experiments = {
+        "Landing page (smoke test)": {
+            "cost": 3, "speed": "days", "bucket": "desirability",
+            "desc": "Create a simple page that promises the outcome and captures interest (email/sign-up). Measures real pull."
+        },
+        "Concierge MVP": {
+            "cost": 4, "speed": "days", "bucket": "desirability",
+            "desc": "Manually deliver a thin slice of the service to a small set of users to measure willingness to continue."
+        },
+        "Wizard-of-Oz prototype": {
+            "cost": 5, "speed": "days", "bucket": "feasibility",
+            "desc": "Prototype the experience; automate UI while you manually do the back-end. Validates UX and feasibility at small scale."
+        },
+        "Pre-order / deposit": {
+            "cost": 4, "speed": "days", "bucket": "desirability",
+            "desc": "Ask for refundable deposits or card-on-file to validate real willingness to pay, not just interest."
+        },
+        "Expert / installer interview": {
+            "cost": 2, "speed": "days", "bucket": "feasibility",
+            "desc": "Speak with professionals to map hidden constraints and edge cases quickly."
+        },
+        "Benchmark vs workaround": {
+            "cost": 3, "speed": "days", "bucket": "desirability",
+            "desc": "Compare behavior using your stopgap vs. current workaround to see if you improve key outcomes."
+        },
+        "Ad split test": {
+            "cost": 3, "speed": "days", "bucket": "desirability",
+            "desc": "Run small paid tests with several messages to find which value prop pulls best."
+        },
+        "Diary / usage log": {
+            "cost": 2, "speed": "weeks", "bucket": "desirability",
+            "desc": "Have users log behavior over time to reveal triggers, frequency and real-world friction."
+        },
+        "Pilot install (micro)": {
+            "cost": 6, "speed": "weeks", "bucket": "feasibility",
+            "desc": "Run a small real-world install with 1–2 households/locations to validate data capture and reliability."
+        },
+        "Partner referral probe": {
+            "cost": 3, "speed": "days", "bucket": "viability",
+            "desc": "Ask adjacent partners to introduce you. Measures channel willingness and early CAC assumptions."
+        },
+        "Pricing probe": {
+            "cost": 3, "speed": "days", "bucket": "viability",
+            "desc": "Offer two–three price anchors to see acceptance and pushback patterns."
+        },
+        "Scale drill (ops)": {
+            "cost": 4, "speed": "days", "bucket": "feasibility",
+            "desc": "Walk through processes for 10× volume. Reveals manual bottlenecks and cost drivers."
+        },
+    }
+
+    # Idea cards (three), each with 8–10 assumptions. These reflect Simulation #1 “best” problem statements.
+    st.session_state.idea_cards = [
+        {
+            "name": "Smart-vent retrofit kit + mobile app",
+            "summary": "Room-by-room airflow control with occupancy/temperature sensing; app + optional vents retrofit.",
+            "assumptions": [
+                ("10% of homeowners willing to buy retrofit vents within 30 days", "desirability"),
+                ("Occupancy+temp sensors maintain ±1.5°F room balance", "feasibility"),
+                ("Average install time < 60 minutes per vent", "feasibility"),
+                ("Noise/power from vent motors acceptable in bedrooms", "desirability"),
+                ("App setup < 10 minutes with clear guidance", "feasibility"),
+                ("Starter kit at $199 yields ≥60% gross margin", "viability"),
+                ("Monthly service at $6.99 acceptable to 20%+ buyers", "viability"),
+                ("DIY install acceptable for 70% of target homes", "feasibility"),
+                ("Partners (HVAC shops) open to offering kits", "viability"),
+            ]
+        },
+        {
+            "name": "ThermaLoop plug-in booster + insights",
+            "summary": "An inline booster device that smooths temperature swings and logs savings; app provides coaching.",
+            "assumptions": [
+                ("Homeowners perceive comfort improvement within 48 hours", "desirability"),
+                ("Booster can be installed without cutting ducts", "feasibility"),
+                ("Measured energy savings ≥ 7% for typical homes", "feasibility"),
+                ("Starter kit at $149 hits ≥55% gross margin", "viability"),
+                ("Refund rate ≤ 8% after 30-day trial", "viability"),
+                ("App onboarding < 8 minutes", "feasibility"),
+                ("Contractors willing to stock for upsell", "viability"),
+                ("Noise level under 35 dB in bedrooms", "desirability"),
+                ("Mobile app daily tips used by ≥30% weekly", "desirability"),
+            ]
+        },
+        {
+            "name": "Tenant-friendly smart radiator valves",
+            "summary": "No-plumber clip-on valves for radiators; app schedules heat, reduces waste for renters/landlords.",
+            "assumptions": [
+                ("Landlords allow tenant install in ≥50% cases", "desirability"),
+                ("Clip-on valve fits 80% of common radiator types", "feasibility"),
+                ("Battery life ≥ 9 months per device", "feasibility"),
+                ("Bundle price $179 acceptable to tenants", "viability"),
+                ("Landlords pay monthly for building dashboard", "viability"),
+                ("App scheduling cuts overheating events by 30%", "feasibility"),
+                ("Install time < 5 minutes per radiator", "feasibility"),
+                ("Tenants value comfort more than aesthetics", "desirability"),
+                ("Support load < 0.2 tickets per device per month", "viability"),
+            ]
+        }
+    ]
+
+    # Ground-truth risk map used to bias results (hidden)
+    # Weight: desirability > feasibility > viability in round 1, then adaptively reweighted
+    st.session_state.risk_weights = {"desirability": 0.45, "feasibility": 0.35, "viability": 0.20}
+
+    # Learner state
+    st.session_state.ranked = []       # list of tuples (assumption, bucket)
+    st.session_state.portfolio = {1: [], 2: [], 3: []}  # selections [(assumption_idx, exp_key)]
+    st.session_state.results = {1: [], 2: [], 3: []}    # results per round
+    st.session_state.learned = []      # narrative bullets from results
+    st.session_state.initialized = True
+
+init_once()
+
+# ----------------------------------------
+# UI Helpers
+# ----------------------------------------
+def step_tabs(active_stage: int):
+    labels = [
         "Intro", "Choose Idea", "Rank Risks",
         "Round 1 — Select", "Round 1 — Results",
         "Round 2 — Select", "Round 2 — Results",
         "Round 3 — Select", "Round 3 — Results",
         "Learning Summary", "Feedback & Score"
     ]
-    cols = st.columns(len(steps))
-    for i, lbl in enumerate(steps):
-        with cols[i]:
-            st.button(("✅ " if i == active_idx else "") + lbl, disabled=True)
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def tokens_left(rk: str) -> int:
-    return st.session_state.tokens[rk]
-
-def current_assumptions() -> List[Tuple[str, str]]:
-    key = st.session_state.idea_key
-    return IDEA_CARDS[key]["assumptions"]
-
-def success_probability(idea_key: str, ass_idx: int, fit: bool, strength: int, rank_pos: int) -> float:
-    """
-    Semi-realistic probability:
-      - higher hidden risk → lower base
-      - better fit and stronger tests → higher
-      - earlier (riskier) ranks → slightly lower base
-    """
-    truth = IDEA_CARDS[idea_key]["risk_truth"][ass_idx]  # 0..1
-    base = 0.55 - 0.25 * truth                      # 0.30..0.55
-    base -= 0.05 * (0.2 * rank_pos)                 # earlier positions harder
-    if fit:
-        base += 0.12
-    base += 0.06 * (strength - 1)                   # +0 / +0.06 / +0.12
-    return max(0.05, min(0.90, base))
-
-# -----------------------------------------------------------------------------
-# Page: Intro
-# -----------------------------------------------------------------------------
-def page_intro():
-    header(0)
-    st.title("Simulation #2 — Designing & Running Early Experiments")
-    st.caption("ThermaLoop: rank risks, pick scrappy tests, learn quickly.")
-    st.markdown("""
-**You will:**
-1. **Choose** an idea focus (Homeowners, Landlords, or Installers)  
-2. **Rank** assumptions from *highest → lowest* risk (use Up/Down controls)  
-3. Run scrappy experiments over **3 rounds** using your token budget  
-4. Review **learning** and receive **scoring + coaching** (with specific reasons)
-
-**Tokens & costs:**  
-Each round gives you tokens. Each experiment costs **2–4 tokens**.  
-Add as many experiments per round as your tokens allow.
-""")
-    if st.button("Start"):
-        goto("idea")
-
-# -----------------------------------------------------------------------------
-# Page: Choose Idea
-# -----------------------------------------------------------------------------
-def page_choose_idea():
-    header(1)
-    st.subheader("Choose your idea focus")
-    cols = st.columns(len(IDEA_CARDS))
-    for (key, card), c in zip(IDEA_CARDS.items(), cols):
+    cols = st.columns(len(labels))
+    for i, (c, label) in enumerate(zip(cols, labels)):
         with c:
-            st.markdown(f"**{card['title']}**")
-            with st.expander("See sample assumptions"):
-                for a, _tag in card["assumptions"]:
-                    st.write("•", a)
-            if st.button("Select", key=f"select_{key}"):
-                st.session_state.idea_key = key
-                st.session_state.rank_order = list(range(len(card["assumptions"])))
-                goto("rank")
+            btn = st.button(label, use_container_width=True)
+            if btn:
+                st.session_state.stage = i
+    # Progress bar
+    st.progress(active_stage / (len(labels) - 1))
 
-# -----------------------------------------------------------------------------
-# Page: Rank Risks (no external package; Up/Down buttons)
-# -----------------------------------------------------------------------------
-def page_rank():
-    header(2)
-    st.subheader("Rank your assumptions (highest → lowest risk)")
-    if not st.session_state.idea_key:
-        st.info("Choose an idea first.")
-        return
+def section_header(title: str, subtitle: str = ""):
+    st.markdown(f"## {title}")
+    if subtitle:
+        st.caption(subtitle)
 
-    assumptions = current_assumptions()
-    order = st.session_state.rank_order
+def idea_picker():
+    st.markdown("### Pick an idea card")
+    for i, card in enumerate(st.session_state.idea_cards):
+        with st.expander(f"{i+1}. {card['name']}", expanded=(st.session_state.idea_idx == i)):
+            st.write(card["summary"])
+            st.markdown("**Example assumptions (hidden risks in parentheses):**")
+            df = pd.DataFrame([{"Assumption": a, "Risk bucket": b} for a, b in card["assumptions"]])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            if st.button(f"Choose '{card['name']}'", key=f"choose_{i}"):
+                st.session_state.idea_idx = i
+    if st.session_state.idea_idx is not None:
+        st.success(f"Chosen: {st.session_state.idea_cards[st.session_state.idea_idx]['name']}")
+        if st.button("Next: Rank Risks ▶"):
+            st.session_state.stage = 2
 
-    st.caption("Use the Up / Down controls to move items. Top = riskiest.")
-    for pos, idx in enumerate(order):
-        a_text, _tag = assumptions[idx]
-        colA, colB, colC = st.columns([8, 1, 1])
-        with colA:
-            st.write(f"**#{pos+1}**  {a_text}")
-        with colB:
-            if st.button("↑", key=f"up_{pos}", disabled=(pos == 0)):
-                order[pos-1], order[pos] = order[pos], order[pos-1]
-                st.experimental_rerun()
-        with colC:
-            if st.button("↓", key=f"dn_{pos}", disabled=(pos == len(order)-1)):
-                order[pos+1], order[pos] = order[pos], order[pos+1]
-                st.experimental_rerun()
+def rank_risks():
+    section_header("Rank your assumptions (highest → lowest risk)",
+                   "Enter 1, 2, 3... (ties allowed, but lower number means higher risk).")
+    card = st.session_state.idea_cards[st.session_state.idea_idx]
+    df = pd.DataFrame([{"Assumption": a, "Bucket": b} for a, b in card["assumptions"]])
+    ranks = []
+    for idx, row in df.iterrows():
+        r = st.number_input(f"Rank: {row['Assumption']}", min_value=1, max_value=10, value=min(idx+1, 10), step=1, key=f"rank_{idx}")
+        ranks.append((idx, r))
+    ranks.sort(key=lambda x: x[1])  # lowest rank first
+    st.session_state.ranked = [(card["assumptions"][i][0], card["assumptions"][i][1], r) for i, r in ranks]
+    st.write("**Your ranking (1 = highest risk):**")
+    df_show = pd.DataFrame([{"Rank": r, "Assumption": a, "Bucket": b} for (a, b, r) in st.session_state.ranked])
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
+    if st.button("Next: Round 1 — Select ▶"):
+        st.session_state.stage = 3
 
-    st.divider()
-    if st.button("Proceed to Round 1"):
-        goto("r1_select")
+def list_experiments_for_assumption(assumption_bucket: str) -> List[str]:
+    # Suggest experiments that primarily hit this bucket
+    exps = [k for k, v in st.session_state.experiments.items() if v["bucket"] == assumption_bucket]
+    # plus two generics
+    generic = ["Ad split test", "Benchmark vs workaround"]
+    for g in generic:
+        if g not in exps:
+            exps.append(g)
+    return exps
 
-# -----------------------------------------------------------------------------
-# Experiment selection UI
-# -----------------------------------------------------------------------------
-def experiment_card(round_key: str, ass_idx: int, a_text: str, a_tag: str):
-    """Render all experiment options for a single assumption."""
-    for exp in EXPERIMENTS:
-        fits = "✅ Best fit" if a_tag in exp.tags_for_fit else "OK fit"
-        disabled = tokens_left(round_key) < exp.cost
-        with st.container(border=True):
-            st.markdown(f"**{exp.name}**  ·  Cost **{exp.cost}**  ·  {fits}")
-            st.caption(exp.description)
-            if st.button(f"Add to plan ({exp.cost} tokens)", key=f"{round_key}_{ass_idx}_{exp.name}", disabled=disabled):
-                st.session_state.tokens[round_key] -= exp.cost
-                st.session_state.portfolio[round_key].append({
-                    "ass_idx": ass_idx,
-                    "assumption": a_text,
-                    "tag": a_tag,
-                    "exp_name": exp.name,
-                    "cost": exp.cost,
-                    "fit": a_tag in exp.tags_for_fit,
-                    "strength": exp.strength
-                })
+def select_round(round_idx: int):
+    section_header(f"Round {round_idx} — Select experiments",
+                   f"You have **{st.session_state.round_budgets[round_idx]} tokens**. "
+                   "Pick as many experiments as your budget allows. "
+                   "We recommend tackling the **riskiest** assumptions first.")
+    # Show top risky assumptions (show all ranked; learner chooses where to spend)
+    df_ranked = pd.DataFrame([
+        {"Rank": r, "Assumption": a, "Bucket": b}
+        for (a, b, r) in st.session_state.ranked
+    ]).sort_values("Rank")
+    st.dataframe(df_ranked, use_container_width=True, hide_index=True)
 
-def sidebar_plan(round_key: str):
-    with st.sidebar:
-        st.markdown(f"### {round_key.upper()} Plan")
-        st.write(f"Tokens left: **{tokens_left(round_key)}**")
-        if not st.session_state.portfolio[round_key]:
-            st.caption("No experiments yet.")
-        else:
-            for i, itm in enumerate(st.session_state.portfolio[round_key], 1):
-                st.write(f"{i}. {itm['exp_name']} → _{itm['assumption']}_ (cost {itm['cost']})")
-            if st.button("Clear round plan", key=f"clear_{round_key}"):
-                refund = sum(itm["cost"] for itm in st.session_state.portfolio[round_key])
-                st.session_state.tokens[round_key] += refund
-                st.session_state.portfolio[round_key].clear()
+    # Selection area
+    remaining = st.session_state.round_budgets[round_idx]
+    st.info(f"**Round {round_idx} tokens remaining:** {remaining}")
 
-def page_round_select(round_key: str, header_idx: int, next_stage: str):
-    header(header_idx)
-    assumptions = current_assumptions()
-    order = st.session_state.rank_order
+    # Build a grid of cards: Assumption → recommended experiments with checkboxes
+    chosen: List[Tuple[int, str]] = []
+    # We cap display to top 8 to keep UI compact
+    for idx, (assumption, bucket, rank) in enumerate(st.session_state.ranked[:8]):
+        with st.expander(f"Assumption (rank {rank}): {assumption}  —  [{bucket}]", expanded=False):
+            options = list_experiments_for_assumption(bucket)
+            for exp_key in options:
+                meta = st.session_state.experiments[exp_key]
+                label = f"{exp_key}  • cost {meta['cost']}  • {meta['speed']}  \n_{meta['desc']}_"
+                check = st.checkbox(label, key=f"r{round_idx}_a{idx}_e{exp_key}")
+                if check:
+                    chosen.append((idx, exp_key))
 
-    st.subheader(f"{round_key.upper()} — Select Experiments")
-    st.write(f"Use your tokens (**{tokens_left(round_key)}** available) to add as many tests as you like.")
-    sidebar_plan(round_key)
+    # Compute cost and enforce budget locally (no auto reruns)
+    total_cost = sum(st.session_state.experiments[e]["cost"] for (_, e) in chosen)
+    over = total_cost - st.session_state.round_budgets[round_idx]
+    if over > 0:
+        st.error(f"Over budget by {over} tokens. Uncheck some experiments to proceed.")
+    else:
+        st.success(f"Planned total cost: {total_cost} tokens (≤ budget).")
 
-    # Show assumptions in current risk order; expand top few by default
-    for rank_pos, idx in enumerate(order, 1):
-        a_text, a_tag = assumptions[idx]
-        with st.expander(f"#{rank_pos}  {a_text}", expanded=(rank_pos <= 2)):
-            experiment_card(round_key, idx, a_text, a_tag)
+    if st.button("Run selected experiments ▶", disabled=(over > 0 or total_cost == 0)):
+        # Save portfolio (convert assumption index to global index)
+        st.session_state.portfolio[round_idx] = chosen.copy()
+        # Run results immediately and advance stage
+        st.session_state.results[round_idx] = run_experiments(round_idx, chosen)
+        st.session_state.stage = round_idx * 2  # 1->2*1=2? (but our stage map uses: 4=R1 results, 6=R2 results, 8=R3 results)
+        # Map: R1 Select (3) -> Results (4), R2 Select (5) -> Results (6), R3 Select (7) -> Results (8)
+        st.session_state.stage = {1: 4, 2: 6, 3: 8}[round_idx]
 
-    st.divider()
-    col1, col2 = st.columns([1, 1])
-    if col1.button("Run selected tests"):
-        run_round(round_key)
-        goto(next_stage)
-    col2.caption("Tip: Fast learning → multiple small bets early, not one big bet.")
+def run_experiments(round_idx: int, selections: List[Tuple[int, str]]) -> List[Dict[str, Any]]:
+    """Simulate experiment outcomes with noise, biased by hidden ground-truth weights."""
+    random.seed(42 + round_idx)  # deterministic per round for now
+    results = []
+    card = st.session_state.idea_cards[st.session_state.idea_idx]
+    for (a_idx, exp_key) in selections:
+        assumption, bucket, rank = st.session_state.ranked[a_idx]
+        base = st.session_state.experiments[exp_key]
 
-# -----------------------------------------------------------------------------
-# Run a round
-# -----------------------------------------------------------------------------
-def run_round(round_key: str):
-    idea = st.session_state.idea_key
-    order = st.session_state.rank_order
-    out = []
-    for itm in st.session_state.portfolio[round_key]:
-        rank_pos = order.index(itm["ass_idx"]) + 1
-        p = success_probability(idea, itm["ass_idx"], itm["fit"], itm["strength"], rank_pos)
-        success = random.random() < p
-        detail = random.choice([
-            "Strong positive signal (quotes + conversion).",
-            "Moderate interest; conversion below target.",
-            "Mixed feedback; unclear value articulation.",
-            "Low signal; likely invalid."
-        ])
-        out.append({
-            "Assumption": itm["assumption"],
-            "Experiment": itm["exp_name"],
-            "Success": success,
-            "Detail": detail,
-            "RankPos": rank_pos,
-            "Fit": "Good" if itm["fit"] else "OK",
-            "Strength": itm["strength"],
-            "Cost": itm["cost"]
+        # Prioritize desirability in Round 1, then adaptively for remaining risks
+        weight = st.session_state.risk_weights[bucket]
+        # Better-ranked assumptions (lower rank number) get stronger signal
+        rank_factor = 1.0 + (max(0, 6 - rank) * 0.08)  # rank 1..5 slightly stronger
+        # Cost also influences: more costly => a bit better signal
+        cost_factor = 1.0 + (base["cost"] * 0.05)
+        # Aggregate signal strength
+        signal = min(0.95, 0.30 + weight * 0.6 * rank_factor * 0.9 + 0.05 * cost_factor)
+
+        # Create a human-readable outcome snippet
+        if base["bucket"] == "desirability":
+            # e.g., CTR, signups, preorders
+            impressions = random.randint(200, 800)
+            ctr = max(0.01, min(0.25, random.gauss(mu=0.06 + 0.20 * signal, sigma=0.02)))
+            clicks = int(impressions * ctr)
+            conversions = int(clicks * (0.15 + 0.6 * signal))
+            outcome = f"{impressions} visits → {clicks} clicks (CTR {ctr:.1%}) → {conversions} signups"
+            validated = conversions >= max(8, int(0.01 * impressions))
+        elif base["bucket"] == "feasibility":
+            success_rate = max(0.3, min(0.95, random.gauss(mu=0.55 + 0.35 * signal, sigma=0.1)))
+            outcome = f"Prototype tasks success rate: {success_rate:.0%} across small pilot"
+            validated = success_rate >= 0.7
+        else:  # viability
+            accept = max(0.05, min(0.6, random.gauss(mu=0.12 + 0.5 * signal, sigma=0.06)))
+            payback = max(4, int(18 - 10 * signal + random.randint(-1, 2)))
+            outcome = f"Price acceptance ~{accept:.0%}; CAC payback ~{payback} months (modelled)"
+            validated = (accept >= 0.10 and payback <= 12)
+
+        results.append({
+            "assumption": assumption,
+            "bucket": bucket,
+            "experiment": exp_key,
+            "outcome": outcome,
+            "validated": validated
         })
-    st.session_state.results[round_key] = out
 
-# -----------------------------------------------------------------------------
-# Results page
-# -----------------------------------------------------------------------------
-def page_round_results(round_key: str, header_idx: int, next_stage: str, title: str):
-    header(header_idx)
-    st.subheader(title)
-    data = st.session_state.results[round_key]
-    if not data:
-        st.info("No tests were run.")
+    # Build learning bullets
+    for r in results:
+        verdict = "validated" if r["validated"] else "inconclusive/invalidated"
+        st.session_state.learned.append(f"{r['experiment']} on “{r['assumption']}” → **{verdict}**: {r['outcome']}")
+    return results
+
+def show_results(round_idx: int, next_stage_label: str):
+    section_header(f"Round {round_idx} — Results")
+    res = st.session_state.results[round_idx]
+    if not res:
+        st.warning("No experiments were run.")
     else:
-        df = pd.DataFrame(data)
-        st.dataframe(df, hide_index=True, use_container_width=True)
-        sr = sum(1 for r in data if r["Success"]) / len(data)
-        spent = sum(r["Cost"] for r in data)
-        st.write(f"Success rate: **{sr:.0%}**  ·  Tokens spent: **{spent}**")
-    if st.button("Next"):
-        goto(next_stage)
-
-# -----------------------------------------------------------------------------
-# Learning summary
-# -----------------------------------------------------------------------------
-def page_learning():
-    header(9)
-    st.subheader("Learning Summary")
-    all_rows = st.session_state.results["r1"] + st.session_state.results["r2"] + st.session_state.results["r3"]
-    if not all_rows:
-        st.info("You have no results yet.")
-        return
-    df = pd.DataFrame(all_rows)
-    st.dataframe(df, hide_index=True, use_container_width=True)
-
-    st.markdown("#### Per-assumption roll-up")
-    roll = df.groupby("Assumption")["Success"].agg(["count", "mean"]).reset_index()
-    roll.rename(columns={"count": "tests", "mean": "success_rate"}, inplace=True)
-    st.dataframe(roll, hide_index=True, use_container_width=True)
-
-    if st.button("View Feedback & Score"):
-        calc_score()
-        goto("score")
-
-# -----------------------------------------------------------------------------
-# Scoring
-# -----------------------------------------------------------------------------
-def calc_score():
-    idea = st.session_state.idea_key
-    assumptions = IDEA_CARDS[idea]["assumptions"]
-    order = st.session_state.rank_order
-
-    # Coverage of top 3 risks in Round 1
-    r1_targets = [r["Assumption"] for r in st.session_state.results["r1"]]
-    top3_texts = [assumptions[i][0] for i in order[:3]]
-    coverage = len([t for t in r1_targets if t in top3_texts]) / max(1, len(top3_texts))
-
-    # Experiment Fit
-    all_rows = st.session_state.results["r1"] + st.session_state.results["r2"] + st.session_state.results["r3"]
-    if all_rows:
-        fit_points = sum((1.0 if r["Fit"] == "Good" else 0.6) * (1 + 0.3 * (r["Strength"] - 1)) for r in all_rows)
-        fit_pct = min(1.0, fit_points / len(all_rows))
+        df = pd.DataFrame(res)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if round_idx < 3:
+        if st.button(f"Next: {next_stage_label} ▶"):
+            st.session_state.stage = {1: 5, 2: 7}[round_idx]
     else:
-        fit_pct = 0.0
+        if st.button("Next: Learning Summary ▶"):
+            st.session_state.stage = 9
 
-    # Resource efficiency
-    spent = {rk: sum(itm["Cost"] for itm in st.session_state.portfolio[rk]) for rk in ["r1", "r2", "r3"]}
-    idle_tokens = sum(st.session_state.tokens.values())
-    early_bias = min(1.0, (spent["r1"] + 0.5 * spent["r2"]) / max(1, sum(spent.values()))) if sum(spent.values()) else 0.0
-    efficiency = max(0.0, 1.0 - (idle_tokens / (ROUND_BUDGET["r1"] + ROUND_BUDGET["r2"] + ROUND_BUDGET["r3"])) * 0.8)
-    resource = 0.6 * early_bias + 0.4 * efficiency
-
-    # Learning outcome (success rate + diversity)
-    if all_rows:
-        sr = sum(1 for r in all_rows if r["Success"]) / len(all_rows)
-        diversity = len(set(r["Assumption"] for r in all_rows)) / max(1, len(assumptions))
-        learning = 0.6 * sr + 0.4 * diversity
+def learning_summary():
+    section_header("Learning Summary", "What you actually learned from the tests you ran.")
+    if st.session_state.learned:
+        for b in st.session_state.learned:
+            st.markdown(f"- {b}")
     else:
-        learning = 0.0
+        st.info("No learning captured yet.")
+    if st.button("Next: Feedback & Score ▶"):
+        st.session_state.stage = 10
 
-    # Assumption Quality proxy (rank + early coverage)
-    quality = 0.5 + 0.5 * coverage
+def feedback_and_score():
+    section_header("Feedback & Score", "How well you chose, sequenced, and used resources.")
+    # Compute scoring components
+    # 1) Assumption Quality: Did they prioritize desirability first in R1?
+    top3 = st.session_state.ranked[:3]
+    desir_first = sum(1 for (_, b, r) in top3 if b == "desirability")
+    assumption_quality = 70 + 10 * desir_first  # up to 100
+    assumption_quality = min(100, assumption_quality)
 
-    to_pct = lambda x: int(100 * max(0.0, min(1.0, x)))
-    S = st.session_state.scoring = {
-        "Assumption Quality": to_pct(quality),
-        "Risk Prioritization": to_pct(coverage),
-        "Experiment Fit": to_pct(fit_pct),
-        "Resource Efficiency": to_pct(resource),
-        "Learning Outcome": to_pct(learning),
-    }
-    S["Total"] = int(
-        0.30 * S["Assumption Quality"] +
-        0.25 * S["Risk Prioritization"] +
-        0.25 * S["Experiment Fit"] +
-        0.10 * S["Resource Efficiency"] +
-        0.10 * S["Learning Outcome"]
+    # 2) Risk Prioritization: Did they test highest-ranked early?
+    # Evaluate if R1 portfolio hits rank 1–3 assumptions
+    r1_idxs = [a for (a, _) in st.session_state.portfolio[1]]
+    hits_top = sum(1 for i in r1_idxs if i in [0, 1, 2])
+    risk_prior = 50 + hits_top * 15
+    risk_prior = min(100, risk_prior)
+
+    # 3) Experiment Fit: bucket-aligned experiments
+    fit = 0
+    total = 0
+    for rnd in (1, 2, 3):
+        for (a_idx, exp_key) in st.session_state.portfolio[rnd]:
+            bucket = st.session_state.ranked[a_idx][1]
+            total += 1
+            if st.session_state.experiments[exp_key]["bucket"] == bucket:
+                fit += 1
+    exp_fit = int(100 * (fit / total)) if total else 0
+
+    # 4) Resource Efficiency: under or equal to budget and not many high-cost in R1
+    eff = 100
+    for rnd in (1, 2, 3):
+        spent = sum(st.session_state.experiments[e]["cost"] for (_, e) in st.session_state.portfolio[rnd])
+        budget = st.session_state.round_budgets[rnd]
+        if spent == 0:
+            eff -= 25
+        elif spent > budget:
+            eff -= 20
+        elif rnd == 1 and spent > budget * 0.8:
+            eff -= 5  # small nudge to leave room for iteration
+    eff = max(0, eff)
+
+    # 5) Learning Outcome: share of validated signals
+    all_res = sum((st.session_state.results[r] for r in (1, 2, 3)), [])
+    if all_res:
+        validated = sum(1 for r in all_res if r["validated"])
+        learn_out = int(100 * validated / len(all_res))
+    else:
+        learn_out = 0
+
+    # Weighted total (30/25/25/10/10)
+    total_score = round(
+        0.30 * assumption_quality +
+        0.25 * risk_prior +
+        0.25 * exp_fit +
+        0.10 * eff +
+        0.10 * learn_out
     )
 
-    # Reasons tailored to action
-    reasons = {}
-    # Risk Prioritization
-    if coverage >= 0.67:
-        reasons["Risk Prioritization"] = "You tested most of the top-ranked risks in Round 1—good sequencing."
-    elif coverage >= 0.34:
-        reasons["Risk Prioritization"] = "You tackled some top risks early; next time, move the scariest unknowns to Round 1."
+    # Display
+    cols = st.columns(2)
+    with cols[0]:
+        st.metric("Total score", total_score)
+        st.progress(total_score/100)
+    with cols[1]:
+        st.write("**Category scores**")
+        st.write(f"- Assumption Quality (30%): **{assumption_quality}**")
+        st.write(f"- Risk Prioritization (25%): **{risk_prior}**")
+        st.write(f"- Experiment Fit (25%): **{exp_fit}**")
+        st.write(f"- Resource Efficiency (10%): **{eff}**")
+        st.write(f"- Learning Outcome (10%): **{learn_out}**")
+
+    st.markdown("### Reasons (personalized)")
+    reasons = []
+    # Reasons tie to exactly what they did
+    if desir_first >= 2:
+        reasons.append("You prioritized **desirability** assumptions early, which is ideal for a new concept.")
     else:
-        reasons["Risk Prioritization"] = "You left top risks for later rounds—start with the hardest unknowns to maximize learning."
+        reasons.append("Consider testing **desirability** signals first (demand/WTP) before heavier feasibility or viability work.")
 
-    # Experiment Fit
-    if fit_pct >= 0.85:
-        reasons["Experiment Fit"] = "Strong alignment between assumption types and chosen tests."
-    elif fit_pct >= 0.70:
-        reasons["Experiment Fit"] = "Mixed alignment—some tests were ideal, others only loosely matched the risk."
+    if hits_top >= 2:
+        reasons.append("You tested **top-ranked risks** in Round 1, reducing uncertainty quickly.")
     else:
-        reasons["Experiment Fit"] = "Many tests didn’t fit the assumption type; review the card descriptions to improve fit."
+        reasons.append("Testing highest-ranked risks earlier would accelerate learning and avoid waste.")
 
-    # Resource Efficiency
-    if resource >= 0.8:
-        reasons["Resource Efficiency"] = "Healthy early spend with little idle budget—nice pacing across rounds."
-    elif resource >= 0.6:
-        reasons["Resource Efficiency"] = "Reasonable pacing, but you could shift a bit more learning into earlier rounds."
+    if exp_fit >= 70:
+        reasons.append("Most chosen experiments matched the **risk type** (e.g., smoke tests for demand, pilots for feasibility).")
     else:
-        reasons["Resource Efficiency"] = "Too many tokens were left idle or saved for late rounds—run more scrappy tests early."
+        reasons.append("Some experiments didn’t match the assumption type. Use short smoke tests for demand; pilots/benchmarks for feasibility; pricing/probes for viability.")
 
-    # Assumption Quality
-    if quality >= 0.8:
-        reasons["Assumption Quality"] = "Your ranking looks thoughtful and you aimed at high-risk unknowns first."
+    if eff >= 90:
+        reasons.append("You used tokens **efficiently**, leaving room for iteration in later rounds.")
     else:
-        reasons["Assumption Quality"] = "Clarify and rank assumptions more sharply—place the scariest unknowns at the top."
+        reasons.append("Conserve some budget in R1 so you can pivot or double-down with better tests in R2/R3.")
 
-    # Learning Outcome
-    if learning >= 0.7:
-        reasons["Learning Outcome"] = "Good mix of clear signals and spread; you can now refine metrics and double-down."
-    elif learning >= 0.45:
-        reasons["Learning Outcome"] = "Some actionable signals emerged; add a follow-up test where results were ambiguous."
+    if learn_out >= 60:
+        reasons.append("You extracted **clear signals** from experiments—good framing and selection.")
     else:
-        reasons["Learning Outcome"] = "Few actionable signals—prefer tests with stronger confidence gain (e.g., Pre-order, Smoke test)."
+        reasons.append("Outcomes were weak/inconclusive—tighten assumption wording and choose tests with clearer pass/fail thresholds.")
 
-    S["_reasons"] = reasons
+    for r in reasons:
+        st.markdown(f"- {r}")
 
-# -----------------------------------------------------------------------------
-# Score page
-# -----------------------------------------------------------------------------
-def page_score():
-    header(10)
-    st.subheader("Feedback & Score")
-    S = st.session_state.scoring
-    if not S:
-        st.info("Run through the rounds first.")
-        return
+    st.markdown("### Coaching notes")
+    st.markdown(
+        "- Start with **pull** (desirability); aim for concrete evidence (signups, deposits, repeated use).\n"
+        "- Use **lightweight** tests first (low cost, fast): it increases the number of shots on goal.\n"
+        "- Match **test → assumption**: Smoke tests for demand; expert/pilot/benchmark for feasibility; price/payback probes for viability.\n"
+        "- **Iterate**: adapt R2/R3 based on data—not momentum.\n"
+    )
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Assumption Quality", S["Assumption Quality"])
-        st.metric("Risk Prioritization", S["Risk Prioritization"])
-        st.metric("Experiment Fit", S["Experiment Fit"])
-    with c2:
-        st.metric("Resource Efficiency", S["Resource Efficiency"])
-        st.metric("Learning Outcome", S["Learning Outcome"])
-        st.success(f"Total Score: {S['Total']}")
-
-    st.markdown("### Reasons")
-    for k in ["Assumption Quality", "Risk Prioritization", "Experiment Fit", "Resource Efficiency", "Learning Outcome"]:
-        st.write(f"**{k}:** {S['_reasons'][k]}")
-
-    st.markdown("### What to do next")
-    st.write("• Plan a follow-up test for any assumption with mixed/weak signals.")
-    st.write("• Convert a successful scrappy test into a clearer metric target for your next milestone.")
-    st.divider()
-    if st.button("Restart Simulation"):
+    if st.button("Restart simulation 🔁"):
         for k in list(st.session_state.keys()):
-            del st.session_state[k]
-        init_state()
-        st.experimental_rerun()
+            if k not in ("initialized",):
+                st.session_state.pop(k, None)
+        init_once()
+        st.session_state.stage = 0
 
-# -----------------------------------------------------------------------------
-# Router
-# -----------------------------------------------------------------------------
-def main():
-    init_state()
-    stage = st.session_state.stage
+# ----------------------------------------
+# Render
+# ----------------------------------------
+st.title("Simulation #2 — Designing & Running Early Experiments")
+st.caption("ThermaLoop: rank risks, pick scrappy tests, learn quickly")
 
-    if stage == "intro":
-        page_intro()
-    elif stage == "idea":
-        page_choose_idea()
-    elif stage == "rank":
-        page_rank()
-    elif stage == "r1_select":
-        page_round_select("r1", 3, "r1_results")
-    elif stage == "r1_results":
-        page_round_results("r1", 4, "r2_select", "Round 1 — Results")
-    elif stage == "r2_select":
-        page_round_select("r2", 5, "r2_results")
-    elif stage == "r2_results":
-        page_round_results("r2", 6, "r3_select", "Round 2 — Results")
-    elif stage == "r3_select":
-        page_round_select("r3", 7, "r3_results")
-    elif stage == "r3_results":
-        page_round_results("r3", 8, "learning", "Round 3 — Results")
-    elif stage == "learning":
-        page_learning()
-    elif stage == "score":
-        page_score()
+step_tabs(st.session_state.stage)
+
+if st.session_state.stage == 0:
+    section_header("Intro",
+                   "You’ll pick an idea card, rank risky assumptions, then run three rounds of scrappy experiments "
+                   "under token budgets: **R1=10**, **R2=8**, **R3=6**. The goal is to reduce the **riskiest** unknowns fast.")
+    st.markdown(
+        "- **Round 1**: prioritize **desirability** (real demand / willingness to pay)\n"
+        "- **Round 2**: address remaining **feasibility** gaps (can we deliver?)\n"
+        "- **Round 3**: check **viability** (margins, payback) or double-down on the biggest blocker"
+    )
+    if st.button("Start ▶"):
+        st.session_state.stage = 1
+
+elif st.session_state.stage == 1:
+    idea_picker()
+
+elif st.session_state.stage == 2:
+    if st.session_state.idea_idx is None:
+        st.warning("Pick an idea first.")
     else:
-        page_intro()
+        rank_risks()
 
-if __name__ == "__main__":
-    main()
+elif st.session_state.stage == 3:
+    if st.session_state.ranked:
+        select_round(1)
+    else:
+        st.warning("Rank risks first.")
+
+elif st.session_state.stage == 4:
+    show_results(1, "Round 2 — Select")
+
+elif st.session_state.stage == 5:
+    select_round(2)
+
+elif st.session_state.stage == 6:
+    show_results(2, "Round 3 — Select")
+
+elif st.session_state.stage == 7:
+    select_round(3)
+
+elif st.session_state.stage == 8:
+    show_results(3, "Learning Summary")
+
+elif st.session_state.stage == 9:
+    learning_summary()
+
+else:
+    feedback_and_score()
