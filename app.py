@@ -391,7 +391,7 @@ def add_to_portfolio(round_idx:int, ass_idx:int, exp_key:str):
         return
     S["tokens"] -= exp["cost"]
     S["portfolio"][round_idx].append({"ass_idx": ass_idx, "exp_key": exp_key})
-    st.experimental_rerun()  # safe for click feedback; Streamlit Cloud supports this alias
+    st.rerun()  # safe for click feedback; Streamlit Cloud supports this alias
 
 def run_round(round_idx:int):
     S["results"][round_idx] = []
