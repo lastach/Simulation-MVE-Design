@@ -597,6 +597,18 @@ def page_score():
 # ROUTER
 # ───────────────────────────────────────────────────────────────────────────────
 def main():
+    try:
+        st.title(TITLE); st.caption(SUB); stage_bar()
+        st.progress((STAGES.index(S["stage"])+1)/len(STAGES))
+        st.divider()
+        # ... existing stage routing ...
+    except Exception as e:
+        st.error("Unexpected error in Simulation #2.")
+        st.exception(e)
+
+if __name__ == "__main__":
+    main()
+
     st.title(TITLE)
     st.caption(SUB)
     stage_bar()
