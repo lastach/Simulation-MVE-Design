@@ -12,7 +12,13 @@ import streamlit as st
 try:
     from streamlit_dnd_list import dnd_list
 except Exception:
-    dnd_list = None  # We'll show a helpful message if missing.
+    dnd_list = None
+
+# --- TEMP: force fallback so the app never crashes if the lib isn't present ---
+FORCE_NO_DND = True
+if FORCE_NO_DND:
+    dnd_list = None
+# ------------------------------------------------------------------------------
 
 st.set_page_config(page_title="Simulation #2 — Scrappy Experiments", page_icon="🧪", layout="wide")
 random.seed(42)
