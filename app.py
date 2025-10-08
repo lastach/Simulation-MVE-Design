@@ -1,7 +1,7 @@
 # app_sim2.py
 # Simulation #2 — Designing & Running Early Experiments (ThermaLoop)
 # Requires: streamlit, pandas, streamlit-dnd-list
-# Run: streamlit run app.py
+# Run: streamlit run app_sim2.py
 
 import random
 from typing import Dict, Any, List, Tuple
