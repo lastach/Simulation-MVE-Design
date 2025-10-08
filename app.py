@@ -1,5 +1,5 @@
 # app_sim2.py
-# Simulation #2 — Designing & Running Early Experiments (ThermaLoop)
+# Simulation #2 — Minimum Viable Experiments (MVE) Design (ThermaLoop)
 # Requires: streamlit, pandas, streamlit-dnd-list
 # Run: streamlit run app_sim2.py
 
