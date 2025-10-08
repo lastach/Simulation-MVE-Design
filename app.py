@@ -352,46 +352,58 @@ def block_pick():
             S["tokens"] = 8
             st.rerun()
 
+# ----------------------------------------------------------------------
+# Experiment card renderer — clean mini-card with short description
+# ----------------------------------------------------------------------
+def render_exp_card(exp, round_idx, ass_idx):
+    with st.container(border=True):
+        st.markdown(f"**{exp['name']}**  \n_{exp['speed']} • cost {exp['cost']} tokens_")
+        st.markdown(
+            f"**What you’ll do:** {exp['do']}  \n"
+            f"**Measure:** {exp['measure']}  \n"
+            f"**Decide:** {exp['decide']}"
+        )
+        if st.button(f"Add — cost {exp['cost']}",
+                     key=f"btn_{round_idx}_{ass_idx}_{exp['key']}"):
+            add_to_portfolio(round_idx, ass_idx, exp['key'])
+
 def block_round(round_idx:int):
     st.subheader(f"Round {round_idx}: pick a portfolio of experiments")
     st.write(f"Tokens available: **{S['tokens']}**")
-    # Render chosen assumptions with quick-select buttons per experiment
+
+    # Render chosen assumptions with experiment cards
     for ass_idx in S["chosen_idx"]:
         a = ASSUMPTIONS[ass_idx]
         with st.expander(f"{a['text']}  —  _{a['theme']}_  | Metric: {a['metric']}", expanded=False):
-            st.caption("Choose an experiment to add:")
             cols = st.columns(3)
             for j, exp in enumerate(EXPERIMENTS):
-                with cols[j%3]:
-                    st.button(exp["name"],
-                              key=f"add_{round_idx}_{ass_idx}_{exp['key']}",
-                              help=f"Do: {exp['do']}\nMeasure: {exp['measure']}\nDecide: {exp['decide']}",
-                              on_click=lambda aidx=ass_idx, ek=exp["key"]: add_to_portfolio(round_idx, aidx, ek))
-            st.caption(f"**What you’ll do:** {exp['do']}\n\n**What you’ll measure:** {exp['measure']}\n\n**Decision rule:** {exp['decide']}")
+                with cols[j % 3]:
+                    render_exp_card(exp, round_idx, ass_idx)
 
     # Show current portfolio
     if S["portfolio"][round_idx]:
         st.markdown("#### Selected this round")
         for n, it in enumerate(S["portfolio"][round_idx], start=1):
             a = ASSUMPTIONS[it["ass_idx"]]
-            e = next(e for e in EXPERIMENTS if e["key"]==it["exp_key"])
+            e = next(e for e in EXPERIMENTS if e["key"] == it["exp_key"])
             st.write(f"{n}. **{a['text']}** → **{e['name']}** (cost {e['cost']})")
 
     left, right = st.columns(2)
-    left.button("Run experiments", disabled=(len(S["portfolio"][round_idx])==0), key=f"run_{round_idx}",
+    left.button("Run experiments",
+                disabled=(len(S["portfolio"][round_idx]) == 0),
+                key=f"run_{round_idx}",
                 on_click=lambda: run_round(round_idx))
     if round_idx > 1:
-        right.button("Skip to scoring", key=f"skip_{round_idx}",
-                     on_click=lambda: to_score())
-
+        right.button("Skip to scoring", key=f"skip_{round_idx}", on_click=lambda: to_score())
+        
 def add_to_portfolio(round_idx:int, ass_idx:int, exp_key:str):
-    exp = next(e for e in EXPERIMENTS if e["key"]==exp_key)
+    exp = next(e for e in EXPERIMENTS if e["key"] == exp_key)
     if exp["cost"] > S["tokens"]:
         st.toast("Not enough tokens for that experiment.", icon="⚠️")
         return
     S["tokens"] -= exp["cost"]
     S["portfolio"][round_idx].append({"ass_idx": ass_idx, "exp_key": exp_key})
-    st.rerun()  # safe for click feedback; Streamlit Cloud supports this alias
+    st.rerun()
 
 def run_round(round_idx:int):
     S["results"][round_idx] = []
