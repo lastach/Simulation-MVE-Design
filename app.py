@@ -32,7 +32,7 @@ def init_state():
     if "tokens_total" not in st.session_state:
         st.session_state.tokens_total = 30  # TOTAL budget across all 3 rounds
     if "tokens_spent" not in st.session_state:
-        st.session_state.tokens_spent = 0
+        st.session_state.tokens_spent = 0   # spent by completed (run) tests
     if "portfolio" not in st.session_state:
         # scheduled tests: round -> list[(assumption_id, exp_key)]
         st.session_state.portfolio = {1: [], 2: [], 3: []}
@@ -69,7 +69,6 @@ IDEAS = {
             {"id": "A7", "text": "Return rate for the starter kit stays under 10%.", "type": "viability"},
             {"id": "A8", "text": "Install instructions can be done self-serve without pro help.", "type": "feasibility"},
         ],
-        # Ground-truth risk (3=very high ⇒ harder to validate; 1=low)
         "truth": {"A1": 2, "A2": 3, "A3": 2, "A4": 1, "A5": 2, "A6": 3, "A7": 2, "A8": 1},
     },
     "landlord_energy": {
@@ -106,83 +105,59 @@ IDEAS = {
     },
 }
 
-# Experiment menu: key -> details  (includes all original types)
+# Experiment menu (includes all types)
 EXPERIMENTS: Dict[str, Dict] = {
     "landing": dict(
         label="Landing Page / Waitlist",
-        cost=3,
-        days=3,
-        desc=(
-            "Publish a page with clear value & CTA (e.g., ‘Join waitlist’). "
-            "Drive a trickle of traffic and measure visits & signups."
-        ),
+        cost=3, days=3,
+        desc=("Publish a page with clear value & CTA (e.g., ‘Join waitlist’). "
+              "Drive a trickle of traffic and measure visits & signups."),
         fit=["desirability", "viability"],
     ),
     "concierge": dict(
         label="Concierge Trial",
-        cost=4,
-        days=7,
-        desc=(
-            "Manually deliver the experience to 1–5 users. "
-            "Observe repeat intent (‘Would you do it again next week?’)."
-        ),
+        cost=4, days=7,
+        desc=("Manually deliver the experience to 1–5 users. "
+              "Observe repeat intent (‘Would you do it again next week?’)."),
         fit=["desirability", "feasibility"],
     ),
     "wizard": dict(
         label="Wizard-of-Oz Prototype",
-        cost=4,
-        days=7,
-        desc=(
-            "Fake the automation behind a UI. "
-            "Observe whether users reach value while the system is ‘human-backed’."
-        ),
+        cost=4, days=7,
+        desc=("Fake the automation behind a UI. "
+              "Observe whether users reach value while the system is ‘human-backed’."),
         fit=["feasibility", "desirability"],
     ),
     "preorder": dict(
         label="Pre-order / Deposit",
-        cost=5,
-        days=10,
-        desc=(
-            "Ask for a deposit or card confirmation on a concrete offer. "
-            "Stronger evidence of purchase intent and price acceptance."
-        ),
+        cost=5, days=10,
+        desc=("Ask for a deposit or card confirmation on a concrete offer. "
+              "Stronger evidence of purchase intent and price acceptance."),
         fit=["viability", "desirability"],
     ),
     "expert": dict(
         label="Expert Interview",
-        cost=2,
-        days=2,
-        desc=(
-            "Structured interviews with domain experts to uncover constraints and hidden costs."
-        ),
+        cost=2, days=2,
+        desc=("Structured interviews with domain experts to uncover constraints and hidden costs."),
         fit=["feasibility", "viability"],
     ),
     "benchmark": dict(
         label="Benchmark vs Workaround",
-        cost=3,
-        days=5,
-        desc=(
-            "Compare your approach against common workarounds on time/accuracy/comfort."
-        ),
+        cost=3, days=5,
+        desc=("Compare your approach against common workarounds on time/accuracy/comfort."),
         fit=["feasibility", "desirability"],
     ),
     "adsplit": dict(
         label="Ad Split Test",
-        cost=4,
-        days=5,
-        desc=(
-            "Run 2–3 ad variants to the same audience to see which message earns more qualified clicks."
-        ),
+        cost=4, days=5,
+        desc=("Run 2–3 ad variants to the same audience to see which message earns more qualified clicks."),
         fit=["desirability"],
     ),
     "diary": dict(
         label="Diary Study / Usage Log",
-        cost=3,
-        days=7,
-        desc=(
-            "Ask a handful of users to log pain episodes or usage for a week. "
-            "Quantifies frequency, recency, and triggers."
-        ),
+        cost=3, days=7,
+        desc=("Ask a handful of users to log pain episodes or usage for a week. "
+              "Quantifies frequency, recency, and triggers."),
         fit=["desirability"],
     ),
 }
@@ -197,12 +172,10 @@ def set_idea(key: str):
     """Choose idea, randomize starting assumption order, reset state."""
     st.session_state.idea_key = key
     idea = IDEAS[key]
-
     shuffled = idea["assumptions"].copy()
-    random.shuffle(shuffled)  # ✅ randomize initial order so learner must reorder
+    random.shuffle(shuffled)  # randomize initial order so learner must reorder
     st.session_state.assumptions = shuffled
     st.session_state.ranked = shuffled.copy()
-
     st.session_state.ground_truth = idea["truth"].copy()
     st.session_state.round = 1
     st.session_state.tokens_spent = 0
@@ -224,7 +197,15 @@ def move_item(idx: int, direction: int):
         items[idx], items[new_idx] = items[new_idx], items[idx]
 
 def pool_remaining() -> int:
-    return st.session_state.tokens_total - st.session_state.tokens_spent
+    return st.session_state.tokens_total - planned_spend()
+
+def planned_spend() -> int:
+    """Tokens spent (completed rounds) + tokens scheduled (all rounds, not yet run)."""
+    scheduled_cost = 0
+    for rnd in (1, 2, 3):
+        for (aid, ek) in st.session_state.portfolio[rnd]:
+            scheduled_cost += EXPERIMENTS[ek]["cost"]
+    return st.session_state.tokens_spent + scheduled_cost
 
 # --------------------------------------------------------------------------------------
 # Simulation engine
@@ -321,33 +302,36 @@ def run_round(round_idx: int):
         if r["success"]:
             st.session_state.validation_progress[r["assumption_type"]] += 1
     st.session_state.results[round_idx] = results
+    # after running, clear the scheduled list for that round (already accounted for in tokens_spent)
+    st.session_state.portfolio[round_idx] = []
 
 # --------------------------------------------------------------------------------------
 # Resource efficiency & scoring
 # --------------------------------------------------------------------------------------
 def resource_efficiency():
-    """Learning-per-cost-per-time with round parallelism."""
+    """Learning-per-cost-per-time with round parallelism (0–25 pts)."""
     total_cost = sum(r["cost"] for rnd in (1, 2, 3) for r in st.session_state.results[rnd])
     total_time = sum(max([r["days"] for r in st.session_state.results[rnd]] or [0]) for rnd in (1, 2, 3))
-    learning_points = sum(
-        2 if r["signal"] == "strong" else 1 if r["signal"] == "weak" else 0
-        for rnd in (1, 2, 3) for r in st.session_state.results[rnd]
-    )
+    strong = sum(1 for rnd in (1, 2, 3) for r in st.session_state.results[rnd] if r["signal"] == "strong")
+    weak = sum(1 for rnd in (1, 2, 3) for r in st.session_state.results[rnd] if r["signal"] == "weak")
+    learning_points = strong * 2 + weak * 1
     if total_cost <= 0 or total_time <= 0:
-        return 0, total_cost, total_time, learning_points, 0.0
-    ratio = learning_points / (total_cost * total_time)  # higher is better
-    # Scale to 0–25 points (this category carries up to 25)
-    score = min(25, round(250 * ratio, 1))
-    return score, total_cost, total_time, learning_points, ratio
+        return 0, total_cost, total_time, learning_points, 0.0, strong, weak
+    ratio = learning_points / (total_cost * total_time)  # higher = better
+    # Scale to 0–25. Tuned so typical ratios (0.01–0.03) map to ~8–24 pts.
+    score = min(25, round(800 * ratio, 1))
+    return score, total_cost, total_time, learning_points, ratio, strong, weak
 
-def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
+def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str], List[str], List[str]]:
     truth = st.session_state.ground_truth
     ranked_ids = [a["id"] for a in st.session_state.ranked]
+
     # True riskiest three by ground truth
     true_top3 = [aid for aid, _ in sorted(truth.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+    user_top3 = ranked_ids[:3]
 
     # Risk Prioritization (0–25)
-    hits = sum(1 for aid in ranked_ids[:3] if aid in true_top3)
+    hits = sum(1 for aid in user_top3 if aid in true_top3)
     risk_prior = int(25 * (hits / 3))
 
     # Experiment Fit (0–25)
@@ -358,10 +342,18 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
             total += 1
             if get_assumption(aid)["type"] in EXPERIMENTS[ek]["fit"]:
                 good += 1
-    exp_fit = int(25 * (good / total)) if total else 0
+    # NOTE: portfolio rounds are cleared after run; so count actual results instead for fit
+    total_results = 0
+    good_results = 0
+    for rnd in (1, 2, 3):
+        for r in st.session_state.results[rnd]:
+            total_results += 1
+            if r["assumption_type"] in EXPERIMENTS[r["experiment"]]["fit"]:
+                good_results += 1
+    exp_fit = int(25 * (good_results / total_results)) if total_results else 0
 
     # Resource Efficiency (0–25)
-    eff, total_cost, total_time, learning_points, ratio = resource_efficiency()
+    eff, total_cost, total_time, learning_points, ratio, strong, weak = resource_efficiency()
 
     # Learning Outcome (0–15): strong=2, weak=1 (cap 15)
     learn = min(15, learning_points)
@@ -371,15 +363,14 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
     qual = 6 + (4 if diversity >= 2 else 0)
 
     total_score = risk_prior + exp_fit + eff + learn + qual
-    if total_score > 100:
-        total_score = 100
+    total_score = min(100, total_score)
 
     reasons = {
         "Assumption Quality": f"Top 5 include {diversity} distinct risk types.",
         "Risk Prioritization": f"{hits}/3 of the true riskiest assumptions were in your top three.",
-        "Experiment Fit": f"{good}/{total} tests matched assumption type (fit-aligned).",
+        "Experiment Fit": f"{good_results}/{total_results} completed tests matched assumption type (fit-aligned).",
         "Resource Efficiency": f"{learning_points} learning pts over {total_cost} cost & {total_time} days (ratio {ratio:.3f}).",
-        "Learning Outcome": f"Signals gathered: {learning_points} (strong=2, weak=1).",
+        "Learning Outcome": f"Signals gathered: strong={strong} (×2), weak={weak} (×1) ⇒ {learning_points} pts.",
     }
     breakdown = {
         "Assumption Quality": qual,
@@ -388,7 +379,7 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
         "Resource Efficiency": eff,
         "Learning Outcome": learn,
     }
-    return total_score, breakdown, reasons
+    return total_score, breakdown, reasons, true_top3, user_top3
 
 # --------------------------------------------------------------------------------------
 # UI widgets
@@ -509,7 +500,7 @@ def screen_round_select(round_idx: int):
     remaining = pool_remaining()
     to_badge(f"Total token budget (all rounds): {st.session_state.tokens_total}", "#295")
     st.write(" ")
-    to_badge(f"Remaining now: {remaining}", "#295")
+    to_badge(f"Remaining now (scheduled + spent considered): {remaining}", "#295")
 
     # show ranked list with selector of experiments
     ranked = st.session_state.ranked
@@ -526,7 +517,8 @@ def screen_round_select(round_idx: int):
                         f"**{card['label']}**  \n_{card['desc']}_  \nCost: **{card['cost']}**, Duration: **{card['days']}d**"
                     )
                     if st.button(f"Add → {a['id']}", key=f"add_{round_idx}_{a['id']}_{ek}"):
-                        if st.session_state.tokens_spent + card["cost"] <= st.session_state.tokens_total:
+                        # enforce strict 30-token cap including scheduled-but-not-run tests
+                        if planned_spend() + card["cost"] <= st.session_state.tokens_total:
                             st.session_state.portfolio[round_idx].append((a["id"], ek))
                             st.toast(f"Added {card['label']} for {a['id']}")
                         else:
@@ -536,13 +528,22 @@ def screen_round_select(round_idx: int):
     scheduled = st.session_state.portfolio[round_idx]
     if scheduled:
         st.markdown("#### Scheduled this round")
-        df = pd.DataFrame(
-            [
-                {"Assumption": aid, "Experiment": EXPERIMENTS[ek]["label"], "Cost": EXPERIMENTS[ek]["cost"], "Days": EXPERIMENTS[ek]["days"]}
-                for (aid, ek) in scheduled
-            ]
-        )
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        # Show with remove buttons
+        for idx, (aid, ek) in enumerate(list(scheduled)):
+            card = EXPERIMENTS[ek]
+            c1, c2, c3, c4, c5 = st.columns([0.25, 0.35, 0.15, 0.15, 0.10])
+            with c1:
+                st.write(f"**{aid}**")
+            with c2:
+                st.write(card["label"])
+            with c3:
+                st.write(f"Cost: {card['cost']}")
+            with c4:
+                st.write(f"Days: {card['days']}")
+            with c5:
+                if st.button("✖️ Remove", key=f"rm_{round_idx}_{idx}"):
+                    st.session_state.portfolio[round_idx].pop(idx)
+                    st.experimental_rerun()
     else:
         st.info("No tests scheduled yet.")
 
@@ -555,6 +556,20 @@ def screen_round_select(round_idx: int):
         )
     else:
         st.button(f"Run Round {round_idx}", disabled=True)
+
+def show_validation_table():
+    """Cumulative validation as a table (no chart)."""
+    totals = {"desirability": 0, "feasibility": 0, "viability": 0}
+    for a in st.session_state.assumptions:
+        totals[a["type"]] += 1
+    prog = st.session_state.validation_progress
+    rows = []
+    for t in ["desirability", "feasibility", "viability"]:
+        validated = prog.get(t, 0)
+        total = totals.get(t, 0)
+        pct = (validated / total * 100) if total else 0
+        rows.append({"Assumption Type": t.title(), "Validated": validated, "Total": total, "Completion %": round(pct, 1)})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 def screen_round_results(round_idx: int):
     stepper()
@@ -580,11 +595,11 @@ def screen_round_results(round_idx: int):
             st.markdown(f"*{r['quant']}*")
             st.caption(r["note"])
 
-    # cumulative validation progress
+    # cumulative validation progress (table)
     st.divider()
     st.markdown("#### Cumulative Validation Progress")
-    show_validation_chart()
-    st.caption("Progress accumulates across rounds. Bar height = count of validated assumptions by type.")
+    show_validation_table()
+    st.caption("Progress accumulates across rounds, by assumption type.")
 
     st.divider()
     if round_idx < 3:
@@ -593,24 +608,13 @@ def screen_round_results(round_idx: int):
         st.button("See Learning Summary & Score", type="primary", on_click=lambda: next_stage("score"))
 
 # --------------------------------------------------------------------------------------
-# Visualization
-# --------------------------------------------------------------------------------------
-def show_validation_chart():
-    prog = st.session_state.validation_progress
-    fig, ax = plt.subplots(figsize=(4, 3))
-    ax.bar(prog.keys(), prog.values(), color=["#4CAF50", "#2196F3", "#FFC107"])
-    ax.set_ylabel("Validated Assumptions")
-    ax.set_title("Cumulative Validation Progress")
-    st.pyplot(fig)
-
-# --------------------------------------------------------------------------------------
 # Scoring & Feedback screen
 # --------------------------------------------------------------------------------------
 def screen_score():
     stepper()
     st.subheader("Learning Summary & Score")
 
-    total, breakdown, reasons = compute_score()
+    total, breakdown, reasons, true_top3, user_top3 = compute_score()
 
     # Show total and table with /100 aligned reasons
     st.metric("Total Score (0–100)", total)
@@ -623,13 +627,19 @@ def screen_score():
         rows.append({"Category": cat, "Score (/100)": out100, "Why you scored this way": reasons.get(cat, "—")})
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    # Cumulative time & money summary
-    eff_score, total_cost, total_time, learning_points, ratio = resource_efficiency()
+    # Clarify Risk Prioritization mapping
+    st.markdown("#### Risk Prioritization Details")
+    st.write(f"- **Your Top 3:** {', '.join(user_top3) if user_top3 else '—'}")
+    st.write(f"- **Ground-Truth Top 3:** {', '.join(true_top3) if true_top3 else '—'}")
+    st.caption("Score awards ≈8.3 pts each correct match (max 25).")
+
+    # Cumulative time & money summary + learning points
+    eff_score, total_cost, total_time, learning_points, ratio, strong, weak = resource_efficiency()
     st.markdown("#### Cumulative Time & Money Summary")
     st.write(f"- **Total tokens spent:** {st.session_state.tokens_spent}/{st.session_state.tokens_total}")
     st.write(f"- **Total cost (token units):** {total_cost}")
     st.write(f"- **Total elapsed time:** {total_time} days (sum of the longest test each round)")
-    st.write(f"- **Learning points:** {learning_points} (strong=2, weak=1)")
+    st.write(f"- **Learning points:** {learning_points} (strong={strong}×2, weak={weak}×1)")
     if learning_points > 0:
         st.write(f"- **Avg cost per learning point:** {round(total_cost / learning_points, 2)}")
         st.write(f"- **Efficiency ratio:** {ratio:.3f} (learning / (cost × time))")
@@ -639,18 +649,18 @@ def screen_score():
     st.markdown("#### Coaching Notes")
     notes = []
     if breakdown["Risk Prioritization"] < 17:
-        notes.append("Push **desirability** risks to the very top and probe them with cheap tests before investing elsewhere.")
+        notes.append("Push **desirability** risks to the top and probe them cheaply before feasibility or viability.")
     if breakdown["Experiment Fit"] < 17:
-        notes.append("Tighten **test-to-assumption fit** — demand → intent tests, feasibility → workflow/latency tests, viability → price/purchase tests.")
+        notes.append("Tighten **test-to-assumption fit** — demand → intent tests, feasibility → workflow/latency, viability → price/purchase.")
     if eff_score < 14:
-        notes.append("Shorten **time to learning** with faster/cheaper tests in Round 1. Mix landing/ads with one concierge probe.")
+        notes.append("Shorten **time to learning** with faster/cheaper tests in Round 1; combine landing/ads with one concierge probe.")
     if breakdown["Learning Outcome"] < 10:
-        notes.append("Increase **signal strength** (e.g., pre-orders, repeat usage) instead of only directional signals.")
+        notes.append("Increase **signal strength** (pre-orders, repeat usage) rather than only directional metrics.")
     diversity = len(set(get_assumption(aid)["type"] for aid in [a["id"] for a in st.session_state.ranked[:5]]))
     if diversity < 2:
-        notes.append("Broaden your **assumption mix** among desirability/feasibility/viability in your top 5.")
+        notes.append("Broaden your **assumption mix** among desirability/feasibility/viability in your top five.")
     if pool_remaining() > 0:
-        notes.append(f"You finished with **{pool_remaining()} tokens** unused. Consider reallocating to higher-signal, short-duration tests earlier.")
+        notes.append(f"You ended with **{pool_remaining()} tokens** unallocated. Consider reserving some, but avoid under-testing in early rounds.")
     if not notes:
         notes.append("Great balance. Your sequencing, fit, and efficiency look strong — this is textbook early validation.")
     for n in notes:
