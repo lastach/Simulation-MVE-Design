@@ -25,9 +25,9 @@ def init_state():
         st.session_state.ranked = []           # same items ordered
     if "round" not in st.session_state:
         st.session_state.round = 1
-    # ----- CHANGE: single carryover pool instead of per-round buckets -----
+    # single carryover pool across rounds
     if "tokens_pool" not in st.session_state:
-        # Sum of your old per-round amounts (12+10+8) = 30
+        # Sum of old per-round amounts (12+10+8) = 30
         st.session_state.tokens_pool = 30
     if "portfolio" not in st.session_state:
         st.session_state.portfolio = {1: [], 2: [], 3: []}  # list of (assumption_id, exp_key)
@@ -44,7 +44,6 @@ init_state()
 
 # --------------------------------------------------------------------------------------
 # Data: Idea cards & assumptions (6–10 each)
-# These map from Sim #1 “best” problem statements in the ThermaLoop direction
 # --------------------------------------------------------------------------------------
 
 IDEAS = {
@@ -69,9 +68,7 @@ IDEAS = {
             {"id": "A8", "text": "Install instructions can be done self-serve without pro help.",
              "type": "feasibility"},
         ],
-        # truth: which assumptions are actually riskiest (drives results)
         "truth": {"A1": 2, "A2": 3, "A3": 2, "A4": 1, "A5": 2, "A6": 3, "A7": 2, "A8": 1}
-        # 3=very risky, 2=moderate, 1=low
     },
     "landlord_energy": {
         "title": "Landlord Energy Saver",
@@ -125,7 +122,7 @@ IDEAS = {
     }
 }
 
-# Experiment menu: key -> (label, cost, days, description, good_for_types)
+# Experiment menu
 EXPERIMENTS: Dict[str, Dict] = {
     "landing": dict(
         label="Landing Page / Waitlist",
@@ -195,47 +192,52 @@ EXPERIMENTS: Dict[str, Dict] = {
 }
 
 # --------------------------------------------------------------------------------------
-# NEW: Quantifiable results per experiment (numbers learners expect IRL)
+# NEW: Quantifiable results + human-readable narratives
 # --------------------------------------------------------------------------------------
-def quant_for_experiment(exp_key: str, a_type: str, rng: random.Random) -> Tuple[Dict, str]:
+def quant_for_experiment(exp_key: str, a_type: str, rng: random.Random) -> Tuple[Dict, str, str]:
     """
-    Return (metrics dict, short note) per experiment key.
-    Uses assumption type for rough realism; keeps it simple & fast.
+    Return (metrics dict, short note, narrative line) per experiment key.
     """
     q = {}
     note = ""
+    narrative = ""
 
     if exp_key == "landing":
         impressions = rng.randint(400, 900)
-        ctr = max(0.5, 6.0 + (2.0 if a_type == "desirability" else 0.0))  # %
+        ctr = round(3.5 + 3.0 * rng.random(), 1)  # %
         clicks = round(impressions * ctr / 100)
         signups = round(clicks * (0.22 + 0.18 * rng.random()))
-        q = {"Impressions": impressions, "CTR %": round(ctr, 1), "Clicks": clicks, "Signups": signups}
-        note = "Landing page: impressions → CTR → signups show top-of-funnel pull."
+        q = {"Impressions": impressions, "CTR %": ctr, "Clicks": clicks, "Signups": signups}
+        note = "Landing page: impressions → CTR → signups shows top-of-funnel pull."
+        narrative = f"Landing Page: {impressions:,} visits → {signups} signups ({ctr}%)."
 
     elif exp_key == "adsplit":
         impressions = rng.randint(800, 1600)
-        ctr_a = round(4.0 + 3.0 * rng.random(), 1)
+        ctr_a = round(3.0 + 3.0 * rng.random(), 1)
         ctr_b = round(ctr_a * (0.85 + 0.3 * rng.random()), 1)
         clicks_a = round(impressions/2 * ctr_a / 100)
         clicks_b = round(impressions/2 * ctr_b / 100)
         q = {"Impressions": impressions, "CTR A %": ctr_a, "CTR B %": ctr_b,
              "Clicks A": clicks_a, "Clicks B": clicks_b}
-        note = "Ad split: compare CTR/clicks to see which proposition/message pulls better."
+        note = "Ad split: compare CTR/clicks to learn what proposition pulls."
+        better = "A" if ctr_a >= ctr_b else "B"
+        narrative = f"Ad Split: {impressions:,} impressions — {better} won (CTR {ctr_a if better=='A' else ctr_b}%)."
 
     elif exp_key == "concierge":
-        trials = rng.randint(4, 9)
+        trials = rng.randint(3, 6)
         would_pay = rng.randint(max(1, trials//3), trials)
         repeat = rng.randint(0, would_pay)
         q = {"Trials": trials, "Would pay again": would_pay, "Repeat after trial": repeat}
         note = "Concierge: paying intent & repeat behavior are stronger than ‘interest’."
+        narrative = f"Concierge Trial: {would_pay} of {trials} would pay again; {repeat} repeated."
 
     elif exp_key == "preorder":
         visitors = rng.randint(120, 300)
-        checkouts = rng.randint(10, 40)
+        checkouts = rng.randint(8, 30)
         confirmed = rng.randint(0, checkouts)
         q = {"Visitors": visitors, "Checkouts": checkouts, "Confirmed cards": confirmed}
         note = "Pre-order: confirmed cards (or deposits) are high-signal demand evidence."
+        narrative = f"Pre-order: {confirmed} confirmed cards from {visitors} visitors."
 
     elif exp_key == "wizard":
         sessions = rng.randint(6, 14)
@@ -243,18 +245,21 @@ def quant_for_experiment(exp_key: str, a_type: str, rng: random.Random) -> Tuple
         ttv = rng.randint(6, 18)  # minutes to ‘aha’
         q = {"Sessions": sessions, "Tasks completed": tasks_done, "Time-to-value (min)": ttv}
         note = "WoZ: can users succeed and reach an ‘aha’ quickly without full automation?"
+        narrative = f"Wizard-of-Oz: {tasks_done}/{sessions} tasks completed; TTV ≈ {ttv} min."
 
     elif exp_key == "expert":
         experts = rng.randint(3, 6)
         converge = rng.randint(max(1, experts//3), experts)
         q = {"Experts": experts, "Converging signals": converge}
-        note = "Expert interviews: look for convergence on constraints & hidden costs."
+        note = "Expert interviews: convergence on constraints & risks."
+        narrative = f"Expert Interviews: {converge} of {experts} aligned on feasibility/risks."
 
     elif exp_key == "benchmark":
         trials = rng.randint(5, 12)
         better = rng.randint(max(1, trials//3), trials)
         q = {"Comparative trials": trials, "Beats workaround": better}
-        note = "Benchmark: show your method beats the common workaround on something that matters."
+        note = "Benchmark: show you beat the current workaround on something that matters."
+        narrative = f"Benchmark: beat workaround in {better}/{trials} trials."
 
     elif exp_key == "diary":
         participants = rng.randint(5, 10)
@@ -262,12 +267,14 @@ def quant_for_experiment(exp_key: str, a_type: str, rng: random.Random) -> Tuple
         severe = rng.randint(0, max(2, events//4))
         q = {"Participants": participants, "Problem events": events, "High-frustration events": severe}
         note = "Diary: frequency & severity distribution over a week."
+        narrative = f"Diary Study: {events} problem events across {participants} participants; {severe} severe."
 
     else:
         q = {}
         note = "No quant generator for this test yet."
+        narrative = "—"
 
-    return q, note
+    return q, note, narrative
 
 # --------------------------------------------------------------------------------------
 # Utilities
@@ -296,7 +303,7 @@ def move_item(idx: int, direction: int):
     if 0 <= new_idx < len(items):
         items[idx], items[new_idx] = items[new_idx], items[idx]
 
-# ----- CHANGES: token carryover helpers -----
+# token carryover helpers
 def total_scheduled_cost() -> int:
     return sum(EXPERIMENTS[e]["cost"] for r in (1,2,3) for (_, e) in st.session_state.portfolio[r])
 
@@ -304,7 +311,6 @@ def pool_remaining() -> int:
     return st.session_state.tokens_pool - total_scheduled_cost()
 
 def token_balance(round_idx: int) -> int:
-    # Backwards-compatible: show pool remaining when on a round screen
     return pool_remaining()
 
 def schedule_test(round_idx: int, assumption_id: str, exp_key: str):
@@ -330,12 +336,12 @@ def run_round(round_idx: int):
         signal = "strong" if success and random.random() < (0.5 + 0.2*fit) else ("weak" if success else "no-signal")
         note = synth_result_note(aid, ek, success, signal)
 
-        # ----- NEW: quant metrics per experiment -----
+        # quant metrics + narrative
         a_type = get_assumption(aid)["type"]
-        quant, quant_note = quant_for_experiment(ek, a_type, rng)
+        quant, quant_note, narrative = quant_for_experiment(ek, a_type, rng)
 
         out.append(dict(aid=aid, experiment=ek, success=success, signal=signal, note=note,
-                        quant=quant, quant_note=quant_note))
+                        quant=quant, quant_note=quant_note, narrative=narrative))
     st.session_state.results[round_idx] = out
 
 def get_assumption(aid: str) -> dict:
@@ -486,7 +492,7 @@ def screen_round_results(round_idx: int):
         st.warning("No results recorded. Go back and schedule tests.")
         return
 
-    # Show each result (outcome + signal + quant metrics)
+    # Show each result (outcome + signal + quant metrics + narrative)
     quant_rows = []
     quant_notes = []
     for r in res:
@@ -495,23 +501,30 @@ def screen_round_results(round_idx: int):
         box = st.container(border=True)
         with box:
             st.markdown(f"**{a['id']}** — {a['text']}")
-            st.markdown(f"**Experiment:** {e['label']}  \n**Outcome:** {'✅ Success' if r['success'] else '❌ No evidence'}  \n**Signal:** {r['signal']}")
+            st.markdown(
+                f"**Experiment:** {e['label']}  \n"
+                f"**Outcome:** {'✅ Success' if r['success'] else '❌ No evidence'}  \n"
+                f"**Signal:** {r['signal']}"
+            )
+            # Human-readable quant narrative for the learner
+            if r.get("narrative") and r["narrative"] != "—":
+                st.markdown(f"*{r['narrative']}*")
             st.caption(r["note"])
+
         if r.get("quant"):
             quant_rows.append({"Assumption": a["id"], "Experiment": e["label"], **r["quant"]})
             if r.get("quant_note"):
                 quant_notes.append(r["quant_note"])
 
     if quant_rows:
-        st.markdown("#### Quant results")
+        st.markdown("#### Quant results (details)")
         st.dataframe(pd.DataFrame(quant_rows), hide_index=True, use_container_width=True)
         with st.expander("How to read these numbers"):
             for n in sorted(set(quant_notes)):
                 st.markdown(f"- {n}")
 
-    # ----- NEW: DFV progress visualization -----
+    # DFV progress mini-chart
     st.markdown("#### Validation progress (Desirability / Feasibility / Viability)")
-    # map signal strength to [0..1]
     strength = {"strong": 1.0, "weak": 0.5, "no-signal": 0.0}
     agg = {"desirability": [], "feasibility": [], "viability": []}
     for r in res:
@@ -541,9 +554,7 @@ CATEGORY_WEIGHTS = {
 
 def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
     truth = st.session_state.ground_truth
-    # user priority: higher in the list = riskier
     ranked_ids = [a["id"] for a in st.session_state.ranked]
-    # “true“ top-3 risks by ground truth
     truth_sorted = sorted(truth.items(), key=lambda kv: kv[1], reverse=True)
     true_top3 = [aid for aid, _ in truth_sorted[:3]]
 
@@ -551,7 +562,7 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
     hits = sum(1 for aid in ranked_ids[:3] if aid in true_top3)
     risk_prior = int(25 * (hits / 3))
 
-    # 2) Experiment Fit (25): proportion of scheduled tests whose type matches assumption type
+    # 2) Experiment Fit (25)
     total = 0
     good = 0
     for rnd in (1, 2, 3):
@@ -561,22 +572,22 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
                 good += 1
     exp_fit = int(25 * (good / total)) if total else 0
 
-    # 3) Resource Efficiency (10): leftover tokens in pool
+    # 3) Resource Efficiency (10): tokens left in pool
     leftover = pool_remaining()
-    eff = min(10, 3 + leftover // 3)  # gentle curve
+    eff = min(10, 3 + leftover // 3)
 
-    # 4) Learning Outcome (10): number of “strong” signals
+    # 4) Learning Outcome (10): strong signals
     strongs = sum(1 for rnd in (1,2,3) for r in st.session_state.results[rnd] if r["signal"] == "strong")
     learn = min(10, strongs * 3)
 
-    # 5) Assumption Quality (30): inferred via your ranking spread (not all desirability on top)
+    # 5) Assumption Quality (30): diversity among top 5
     types_top5 = [get_assumption(aid)["type"] for aid in ranked_ids[:5]]
     diversity = len(set(types_top5))
     qual = 20 + (10 if diversity >= 2 else 0)
 
     total_score = risk_prior + exp_fit + eff + learn + qual
 
-    # reasons
+    # reasons (aligned to category order)
     reasons = {
         "Assumption Quality": f"Diversity in top priorities: {diversity} distinct assumption types.",
         "Risk Prioritization": f"{hits}/3 of the true riskiest assumptions were in your top priorities.",
@@ -599,37 +610,55 @@ def screen_score():
 
     total, breakdown, reasons = compute_score()
 
-    # Convert to /100 display while preserving category order
+    # Convert to /100 display while preserving category order and show reason beside it
     ordered = list(CATEGORY_WEIGHTS.keys())
-    display_rows = []
+    rows = []
     for cat in ordered:
         raw = breakdown.get(cat, 0)
         out100 = round(100 * raw / CATEGORY_WEIGHTS[cat]) if CATEGORY_WEIGHTS[cat] else 0
-        display_rows.append({"Category": cat, "Score /100": out100, "Why you scored this way": reasons.get(cat, "—")})
+        rows.append({
+            "Category": cat,
+            "Score (/100)": out100,
+            "Why you scored this way": reasons.get(cat, "—")
+        })
 
-    st.metric("Total Score (sum of categories)", total)
-    st.markdown("#### Category scores (out of 100) + reasons")
-    st.dataframe(pd.DataFrame(display_rows), hide_index=True, use_container_width=True)
+    st.metric("Total Score (0–100)", total)  # total already sums to max 100
+    st.markdown("#### Category scores (out of 100) with rationale")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    # Richer coaching notes based on actual play
+    # Coverage by type across all rounds
+    all_runs = []
+    for rnd in (1,2,3):
+        all_runs.extend(st.session_state.results[rnd])
+    type_counts = {"desirability":0,"feasibility":0,"viability":0}
+    for r in all_runs:
+        typ = get_assumption(r["aid"])["type"]
+        type_counts[typ] = type_counts.get(typ,0)+1
+    total_tests = sum(type_counts.values())
+
+    notes = []
+    if breakdown["Risk Prioritization"] < 18:
+        notes.append("Your **top-3 risks** didn’t fully match ground truth. Push clear desirability risks to the very top and test them first.")
+    if breakdown["Experiment Fit"] < 18:
+        notes.append("Some tests didn’t match the **assumption type**. Align intent tests to desirability; feasibility to usability/ops; viability to pricing/purchase.")
+    if total_tests and type_counts["desirability"]/max(1,total_tests) < 0.4:
+        notes.append("You ran relatively **few desirability tests**. Early validation benefits from cheap demand tests before feasibility or scaling.")
+    if breakdown["Resource Efficiency"] < 8:
+        notes.append("Token usage was heavy early. Preserve some budget for iteration after learning from Round 1.")
+    if breakdown["Learning Outcome"] < 7:
+        notes.append("Few **strong signals**. Prefer tests that can yield decisive evidence (e.g., pre-orders, repeat behavior in concierge).")
+    if pool_remaining() > 0:
+        notes.append(f"You finished with **{pool_remaining()} tokens** unused. If stuck, try a different mix (e.g., landing + concierge) in Round 1.")
+    if not notes:
+        notes.append("Great balance. Your sequencing, fit, and learning loops look strong—this is a solid approach to early validation.")
 
     st.divider()
     st.markdown("#### Coaching Notes")
-    notes = []
-    if breakdown["Risk Prioritization"] < 18:
-        notes.append("Push the **riskiest desirability** items to the top and test cheaply first.")
-    if breakdown["Experiment Fit"] < 18:
-        notes.append("Pick experiments that match the **assumption type** (e.g., intent tests for desirability).")
-    if breakdown["Resource Efficiency"] < 8:
-        notes.append("Avoid stacking multiple high-cost tests in early rounds; preserve tokens for iteration.")
-    if breakdown["Learning Outcome"] < 7:
-        notes.append("Favor experiments that can yield **stronger signals** in days, not weeks.")
-    if breakdown["Assumption Quality"] < 26:
-        notes.append("Ensure your top assumptions are **specific and measurable**, not vague themes.")
-    if not notes:
-        notes.append("Great balance. Your sequencing and test selection show strong product sense.")
     for n in notes:
         st.write(f"- {n}")
 
-    st.success("Simulation complete. You can refresh to try a different idea or ranking strategy.")
+    st.success("Simulation complete. Refresh to try a different idea or ranking strategy.")
 
 # --------------------------------------------------------------------------------------
 # Router
