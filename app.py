@@ -25,8 +25,10 @@ def init_state():
         st.session_state.ranked = []           # same items ordered
     if "round" not in st.session_state:
         st.session_state.round = 1
-    if "tokens" not in st.session_state:
-        st.session_state.tokens = {1: 12, 2: 10, 3: 8}
+    # ----- CHANGE: single carryover pool instead of per-round buckets -----
+    if "tokens_pool" not in st.session_state:
+        # Sum of your old per-round amounts (12+10+8) = 30
+        st.session_state.tokens_pool = 30
     if "portfolio" not in st.session_state:
         st.session_state.portfolio = {1: [], 2: [], 3: []}  # list of (assumption_id, exp_key)
     if "results" not in st.session_state:
@@ -37,7 +39,6 @@ def init_state():
         st.session_state.risk_ranking = []     # list of (assumption_id, user_rank)
     if "learned" not in st.session_state:
         st.session_state.learned = []
-
 
 init_state()
 
@@ -194,6 +195,81 @@ EXPERIMENTS: Dict[str, Dict] = {
 }
 
 # --------------------------------------------------------------------------------------
+# NEW: Quantifiable results per experiment (numbers learners expect IRL)
+# --------------------------------------------------------------------------------------
+def quant_for_experiment(exp_key: str, a_type: str, rng: random.Random) -> Tuple[Dict, str]:
+    """
+    Return (metrics dict, short note) per experiment key.
+    Uses assumption type for rough realism; keeps it simple & fast.
+    """
+    q = {}
+    note = ""
+
+    if exp_key == "landing":
+        impressions = rng.randint(400, 900)
+        ctr = max(0.5, 6.0 + (2.0 if a_type == "desirability" else 0.0))  # %
+        clicks = round(impressions * ctr / 100)
+        signups = round(clicks * (0.22 + 0.18 * rng.random()))
+        q = {"Impressions": impressions, "CTR %": round(ctr, 1), "Clicks": clicks, "Signups": signups}
+        note = "Landing page: impressions → CTR → signups show top-of-funnel pull."
+
+    elif exp_key == "adsplit":
+        impressions = rng.randint(800, 1600)
+        ctr_a = round(4.0 + 3.0 * rng.random(), 1)
+        ctr_b = round(ctr_a * (0.85 + 0.3 * rng.random()), 1)
+        clicks_a = round(impressions/2 * ctr_a / 100)
+        clicks_b = round(impressions/2 * ctr_b / 100)
+        q = {"Impressions": impressions, "CTR A %": ctr_a, "CTR B %": ctr_b,
+             "Clicks A": clicks_a, "Clicks B": clicks_b}
+        note = "Ad split: compare CTR/clicks to see which proposition/message pulls better."
+
+    elif exp_key == "concierge":
+        trials = rng.randint(4, 9)
+        would_pay = rng.randint(max(1, trials//3), trials)
+        repeat = rng.randint(0, would_pay)
+        q = {"Trials": trials, "Would pay again": would_pay, "Repeat after trial": repeat}
+        note = "Concierge: paying intent & repeat behavior are stronger than ‘interest’."
+
+    elif exp_key == "preorder":
+        visitors = rng.randint(120, 300)
+        checkouts = rng.randint(10, 40)
+        confirmed = rng.randint(0, checkouts)
+        q = {"Visitors": visitors, "Checkouts": checkouts, "Confirmed cards": confirmed}
+        note = "Pre-order: confirmed cards (or deposits) are high-signal demand evidence."
+
+    elif exp_key == "wizard":
+        sessions = rng.randint(6, 14)
+        tasks_done = rng.randint(max(2, sessions//3), sessions)
+        ttv = rng.randint(6, 18)  # minutes to ‘aha’
+        q = {"Sessions": sessions, "Tasks completed": tasks_done, "Time-to-value (min)": ttv}
+        note = "WoZ: can users succeed and reach an ‘aha’ quickly without full automation?"
+
+    elif exp_key == "expert":
+        experts = rng.randint(3, 6)
+        converge = rng.randint(max(1, experts//3), experts)
+        q = {"Experts": experts, "Converging signals": converge}
+        note = "Expert interviews: look for convergence on constraints & hidden costs."
+
+    elif exp_key == "benchmark":
+        trials = rng.randint(5, 12)
+        better = rng.randint(max(1, trials//3), trials)
+        q = {"Comparative trials": trials, "Beats workaround": better}
+        note = "Benchmark: show your method beats the common workaround on something that matters."
+
+    elif exp_key == "diary":
+        participants = rng.randint(5, 10)
+        events = rng.randint(10, 40)
+        severe = rng.randint(0, max(2, events//4))
+        q = {"Participants": participants, "Problem events": events, "High-frustration events": severe}
+        note = "Diary: frequency & severity distribution over a week."
+
+    else:
+        q = {}
+        note = "No quant generator for this test yet."
+
+    return q, note
+
+# --------------------------------------------------------------------------------------
 # Utilities
 # --------------------------------------------------------------------------------------
 def next_stage(s: str):
@@ -220,21 +296,30 @@ def move_item(idx: int, direction: int):
     if 0 <= new_idx < len(items):
         items[idx], items[new_idx] = items[new_idx], items[idx]
 
+# ----- CHANGES: token carryover helpers -----
+def total_scheduled_cost() -> int:
+    return sum(EXPERIMENTS[e]["cost"] for r in (1,2,3) for (_, e) in st.session_state.portfolio[r])
+
+def pool_remaining() -> int:
+    return st.session_state.tokens_pool - total_scheduled_cost()
+
 def token_balance(round_idx: int) -> int:
-    return st.session_state.tokens[round_idx] - sum(EXPERIMENTS[e]["cost"] for _, e in st.session_state.portfolio[round_idx])
+    # Backwards-compatible: show pool remaining when on a round screen
+    return pool_remaining()
 
 def schedule_test(round_idx: int, assumption_id: str, exp_key: str):
     cost = EXPERIMENTS[exp_key]["cost"]
-    if token_balance(round_idx) >= cost:
+    if pool_remaining() >= cost:
         st.session_state.portfolio[round_idx].append((assumption_id, exp_key))
         st.toast(f"Added {EXPERIMENTS[exp_key]['label']} for {assumption_id} (Round {round_idx})")
     else:
-        st.warning("Not enough tokens for that test.")
+        st.warning("Not enough tokens in your pool.")
 
 def run_round(round_idx: int):
     # produce results biased by ground truth risk level
     out = []
     truth = st.session_state.ground_truth
+    rng = random.Random(42 + round_idx)  # stable per round
     for (aid, ek) in st.session_state.portfolio[round_idx]:
         risk = truth.get(aid, 2)  # 1..3
         fit = 1 if get_assumption(aid)["type"] in EXPERIMENTS[ek]["fit"] else 0
@@ -244,7 +329,13 @@ def run_round(round_idx: int):
         success = random.random() < p
         signal = "strong" if success and random.random() < (0.5 + 0.2*fit) else ("weak" if success else "no-signal")
         note = synth_result_note(aid, ek, success, signal)
-        out.append(dict(aid=aid, experiment=ek, success=success, signal=signal, note=note))
+
+        # ----- NEW: quant metrics per experiment -----
+        a_type = get_assumption(aid)["type"]
+        quant, quant_note = quant_for_experiment(ek, a_type, rng)
+
+        out.append(dict(aid=aid, experiment=ek, success=success, signal=signal, note=note,
+                        quant=quant, quant_note=quant_note))
     st.session_state.results[round_idx] = out
 
 def get_assumption(aid: str) -> dict:
@@ -350,11 +441,10 @@ def screen_round_select(round_idx: int):
     stepper()
     st.subheader(f"Round {round_idx} — Select your experiments")
     st.caption("Schedule as many tests as your **tokens** allow. Mix quick/cheap with higher-signal where it fits.")
-    # tokens
-    bal = token_balance(round_idx)
-    to_badge(f"Tokens this round: {st.session_state.tokens[round_idx]}", "#295")
+    # tokens (carryover pool)
+    to_badge(f"Token pool (carryover): {st.session_state.tokens_pool}", "#295")
     st.write(" ")
-    to_badge(f"Remaining: {bal}", "#295")
+    to_badge(f"Remaining now: {pool_remaining()}", "#295")
 
     # show ranked list with selector of experiments
     ranked = st.session_state.ranked
@@ -396,6 +486,9 @@ def screen_round_results(round_idx: int):
         st.warning("No results recorded. Go back and schedule tests.")
         return
 
+    # Show each result (outcome + signal + quant metrics)
+    quant_rows = []
+    quant_notes = []
     for r in res:
         a = get_assumption(r["aid"])
         e = EXPERIMENTS[r["experiment"]]
@@ -404,6 +497,29 @@ def screen_round_results(round_idx: int):
             st.markdown(f"**{a['id']}** — {a['text']}")
             st.markdown(f"**Experiment:** {e['label']}  \n**Outcome:** {'✅ Success' if r['success'] else '❌ No evidence'}  \n**Signal:** {r['signal']}")
             st.caption(r["note"])
+        if r.get("quant"):
+            quant_rows.append({"Assumption": a["id"], "Experiment": e["label"], **r["quant"]})
+            if r.get("quant_note"):
+                quant_notes.append(r["quant_note"])
+
+    if quant_rows:
+        st.markdown("#### Quant results")
+        st.dataframe(pd.DataFrame(quant_rows), hide_index=True, use_container_width=True)
+        with st.expander("How to read these numbers"):
+            for n in sorted(set(quant_notes)):
+                st.markdown(f"- {n}")
+
+    # ----- NEW: DFV progress visualization -----
+    st.markdown("#### Validation progress (Desirability / Feasibility / Viability)")
+    # map signal strength to [0..1]
+    strength = {"strong": 1.0, "weak": 0.5, "no-signal": 0.0}
+    agg = {"desirability": [], "feasibility": [], "viability": []}
+    for r in res:
+        typ = get_assumption(r["aid"])["type"]
+        agg[typ].append(strength.get(r["signal"], 0.0))
+    pct = {k.capitalize(): (round(100*sum(v)/len(v),1) if v else 0.0) for k, v in agg.items()}
+    st.bar_chart(pd.DataFrame([pct], index=["Progress"]))
+    st.caption("Progress = average signal strength this round (0–100).")
 
     st.divider()
     if round_idx < 3:
@@ -415,6 +531,14 @@ def screen_round_results(round_idx: int):
 # --------------------------------------------------------------------------------------
 # Scoring & Feedback
 # --------------------------------------------------------------------------------------
+CATEGORY_WEIGHTS = {
+    "Assumption Quality": 30,
+    "Risk Prioritization": 25,
+    "Experiment Fit": 25,
+    "Resource Efficiency": 10,
+    "Learning Outcome": 10,
+}
+
 def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
     truth = st.session_state.ground_truth
     # user priority: higher in the list = riskier
@@ -437,9 +561,9 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
                 good += 1
     exp_fit = int(25 * (good / total)) if total else 0
 
-    # 3) Resource Efficiency (10): leftover tokens + avoided expensive stacks early
-    leftover = sum(token_balance(r) for r in (1,2,3))
-    eff = min(10, 3 + leftover)  # simple heuristic
+    # 3) Resource Efficiency (10): leftover tokens in pool
+    leftover = pool_remaining()
+    eff = min(10, 3 + leftover // 3)  # gentle curve
 
     # 4) Learning Outcome (10): number of “strong” signals
     strongs = sum(1 for rnd in (1,2,3) for r in st.session_state.results[rnd] if r["signal"] == "strong")
@@ -454,11 +578,11 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str]]:
 
     # reasons
     reasons = {
+        "Assumption Quality": f"Diversity in top priorities: {diversity} distinct assumption types.",
         "Risk Prioritization": f"{hits}/3 of the true riskiest assumptions were in your top priorities.",
         "Experiment Fit": f"{good}/{total} tests matched assumption type (fit-aligned).",
-        "Resource Efficiency": f"Leftover tokens across rounds: {leftover}. Early rounds avoided heavy burn.",
+        "Resource Efficiency": f"Leftover tokens after Round 3: {leftover} (carryover pool).",
         "Learning Outcome": f"Strong signals collected: {strongs}.",
-        "Assumption Quality": f"Diversity in top priorities: {diversity} distinct assumption types.",
     }
     breakdown = {
         "Assumption Quality": qual,
@@ -474,16 +598,18 @@ def screen_score():
     st.subheader("Learning Summary & Score")
 
     total, breakdown, reasons = compute_score()
-    st.metric("Total Score", total)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("#### Category Scores")
-        for k, v in breakdown.items():
-            st.write(f"- **{k}**: {v}")
-    with c2:
-        st.markdown("#### Why you scored this way")
-        for k, txt in reasons.items():
-            st.write(f"- **{k}** — {txt}")
+
+    # Convert to /100 display while preserving category order
+    ordered = list(CATEGORY_WEIGHTS.keys())
+    display_rows = []
+    for cat in ordered:
+        raw = breakdown.get(cat, 0)
+        out100 = round(100 * raw / CATEGORY_WEIGHTS[cat]) if CATEGORY_WEIGHTS[cat] else 0
+        display_rows.append({"Category": cat, "Score /100": out100, "Why you scored this way": reasons.get(cat, "—")})
+
+    st.metric("Total Score (sum of categories)", total)
+    st.markdown("#### Category scores (out of 100) + reasons")
+    st.dataframe(pd.DataFrame(display_rows), hide_index=True, use_container_width=True)
 
     st.divider()
     st.markdown("#### Coaching Notes")
