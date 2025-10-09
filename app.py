@@ -30,7 +30,7 @@ def init_state():
     if "round" not in st.session_state:
         st.session_state.round = 1
     if "tokens_total" not in st.session_state:
-        st.session_state.tokens_total = 30  # TOTAL across all 3 rounds
+        st.session_state.tokens_total = 30  # TOTAL budget across all 3 rounds
     if "tokens_spent" not in st.session_state:
         st.session_state.tokens_spent = 0
     if "portfolio" not in st.session_state:
@@ -53,7 +53,7 @@ def init_state():
 init_state()
 
 # --------------------------------------------------------------------------------------
-# Idea cards & assumptions (ThermaLoop variant shown for now)
+# Idea cards & assumptions (ThermaLoop variants)
 # --------------------------------------------------------------------------------------
 IDEAS = {
     "home_comfort": {
@@ -71,10 +71,42 @@ IDEAS = {
         ],
         # Ground-truth risk (3=very high ⇒ harder to validate; 1=low)
         "truth": {"A1": 2, "A2": 3, "A3": 2, "A4": 1, "A5": 2, "A6": 3, "A7": 2, "A8": 1},
-    }
+    },
+    "landlord_energy": {
+        "title": "Landlord Energy Saver",
+        "one_liner": "LoRa sensors + portal for small landlords to cut HVAC waste and get rebates.",
+        "assumptions": [
+            {"id": "B1", "text": "Small landlords are willing to pilot a $0 down kit for 30 days.", "type": "desirability"},
+            {"id": "B2", "text": "HVAC runtime can be reduced ≥10% without tenant complaints.", "type": "feasibility"},
+            {"id": "B3", "text": "A property portal reduces landlord effort vs. spreadsheets.", "type": "desirability"},
+            {"id": "B4", "text": "End-to-end logistics (ship, install, support) is manageable.", "type": "feasibility"},
+            {"id": "B5", "text": "Gross margin ≥55% on device + ≥70% on SaaS at $6–$12/unit/mo.", "type": "viability"},
+            {"id": "B6", "text": "Rebate paperwork & partner channel can acquire leads under $180 CAC.", "type": "viability"},
+            {"id": "B7", "text": "Tenants won’t disable devices or complain about privacy.", "type": "desirability"},
+            {"id": "B8", "text": "Landlords will sign annual agreements if payback ≤9 months.", "type": "viability"},
+            {"id": "B9", "text": "Gateway connectivity (LoRa/LTE) works in ≥85% of buildings without site visit.", "type": "feasibility"},
+        ],
+        "truth": {"B1": 2, "B2": 3, "B3": 2, "B4": 2, "B5": 2, "B6": 3, "B7": 2, "B8": 2, "B9": 2},
+    },
+    "installer_tools": {
+        "title": "Installer Pro Toolkit",
+        "one_liner": "A pro kit + mobile app for HVAC installers to diagnose airflow issues fast.",
+        "assumptions": [
+            {"id": "C1", "text": "Installers see airflow diagnosis as a high-value differentiator.", "type": "desirability"},
+            {"id": "C2", "text": "Pros will pre-order a kit at $299–$399 if it saves 30 min per job.", "type": "desirability"},
+            {"id": "C3", "text": "Clamp sensors + app yield a clear pass/fail in <5 minutes.", "type": "feasibility"},
+            {"id": "C4", "text": "Kit COGS can hit ≤ $120 at pilot volumes.", "type": "viability"},
+            {"id": "C5", "text": "Tool integrates with common thermostats for readings/logs.", "type": "feasibility"},
+            {"id": "C6", "text": "Wholesale distributors will carry the kit with standard margin.", "type": "viability"},
+            {"id": "C7", "text": "Pros actually use the tool in the field (not a shelf product).", "type": "desirability"},
+            {"id": "C8", "text": "In-app ‘good/better/best’ recs reduce callbacks by ≥15%.", "type": "feasibility"},
+            {"id": "C9", "text": "Field failure/return rate <5% in first 90 days.", "type": "viability"},
+        ],
+        "truth": {"C1": 2, "C2": 3, "C3": 2, "C4": 2, "C5": 2, "C6": 2, "C7": 2, "C8": 2, "C9": 1},
+    },
 }
 
-# Experiment menu: key -> details
+# Experiment menu: key -> details  (includes all original types)
 EXPERIMENTS: Dict[str, Dict] = {
     "landing": dict(
         label="Landing Page / Waitlist",
@@ -121,10 +153,18 @@ EXPERIMENTS: Dict[str, Dict] = {
         cost=2,
         days=2,
         desc=(
-            "Structured interviews with domain experts (installers, auditors, distributors) "
-            "to uncover constraints and hidden costs."
+            "Structured interviews with domain experts to uncover constraints and hidden costs."
         ),
         fit=["feasibility", "viability"],
+    ),
+    "benchmark": dict(
+        label="Benchmark vs Workaround",
+        cost=3,
+        days=5,
+        desc=(
+            "Compare your approach against common workarounds on time/accuracy/comfort."
+        ),
+        fit=["feasibility", "desirability"],
     ),
     "adsplit": dict(
         label="Ad Split Test",
@@ -132,6 +172,16 @@ EXPERIMENTS: Dict[str, Dict] = {
         days=5,
         desc=(
             "Run 2–3 ad variants to the same audience to see which message earns more qualified clicks."
+        ),
+        fit=["desirability"],
+    ),
+    "diary": dict(
+        label="Diary Study / Usage Log",
+        cost=3,
+        days=7,
+        desc=(
+            "Ask a handful of users to log pain episodes or usage for a week. "
+            "Quantifies frequency, recency, and triggers."
         ),
         fit=["desirability"],
     ),
@@ -191,7 +241,8 @@ def quant_for_experiment(exp_key: str, rng: random.Random) -> str:
         ctr_a = round(2.8 + 2.5 * rng.random(), 1)
         ctr_b = round(ctr_a * (0.85 + 0.3 * rng.random()), 1)
         winner = "A" if ctr_a >= ctr_b else "B"
-        return f"{imps:,} impressions — variant {winner} higher CTR ({ctr_a if winner=='A' else ctr_b}%)."
+        win_ctr = ctr_a if winner == "A" else ctr_b
+        return f"{imps:,} impressions — variant {winner} higher CTR ({win_ctr}%)."
     if exp_key == "concierge":
         trials = rng.randint(3, 6)
         would_pay = rng.randint(max(1, trials // 2), trials)
@@ -210,6 +261,17 @@ def quant_for_experiment(exp_key: str, rng: random.Random) -> str:
         experts = rng.randint(3, 6)
         converge = rng.randint(max(1, experts // 3), experts)
         return f"{experts} experts; {converge} converged on feasibility/cost drivers."
+    if exp_key == "benchmark":
+        ours = rng.randint(8, 18)
+        workaround = ours + rng.randint(-3, 6)
+        delta = workaround - ours
+        better = "faster" if delta > 0 else "slower"
+        return f"Our method {abs(delta)} min {better} than workaround ({ours} vs {workaround} min)."
+    if exp_key == "diary":
+        participants = rng.randint(4, 8)
+        episodes = rng.randint(participants * 3, participants * 10)
+        avg = round(episodes / participants, 1)
+        return f"{participants} participants logged {episodes} pain episodes (avg {avg}/person)."
     return "—"
 
 def synth_result_note(aid: str, ek: str, success: bool, signal: str) -> str:
@@ -267,12 +329,14 @@ def resource_efficiency():
     """Learning-per-cost-per-time with round parallelism."""
     total_cost = sum(r["cost"] for rnd in (1, 2, 3) for r in st.session_state.results[rnd])
     total_time = sum(max([r["days"] for r in st.session_state.results[rnd]] or [0]) for rnd in (1, 2, 3))
-    learning_points = sum(2 if r["signal"] == "strong" else 1 if r["signal"] == "weak" else 0
-                          for rnd in (1, 2, 3) for r in st.session_state.results[rnd])
+    learning_points = sum(
+        2 if r["signal"] == "strong" else 1 if r["signal"] == "weak" else 0
+        for rnd in (1, 2, 3) for r in st.session_state.results[rnd]
+    )
     if total_cost <= 0 or total_time <= 0:
         return 0, total_cost, total_time, learning_points, 0.0
     ratio = learning_points / (total_cost * total_time)  # higher is better
-    # Scale to 0–25 points (this category now carries up to 25)
+    # Scale to 0–25 points (this category carries up to 25)
     score = min(25, round(250 * ratio, 1))
     return score, total_cost, total_time, learning_points, ratio
 
@@ -395,19 +459,27 @@ def screen_intro():
 5) See your **score** with targeted coaching notes.
 """
     )
-    st.info("Tokens shown in Round 1 are your **total budget across all rounds** (not per-round).")
+    st.info("**Be intentional in Round 1**: use only the tokens you need so you can test other assumptions in later rounds.")
     st.button("Start", type="primary", on_click=lambda: next_stage("choose"))
 
 def screen_choose():
     stepper()
     st.subheader("Pick your idea to test")
-    idea = IDEAS["home_comfort"]
-    st.markdown(f"### {idea['title']}")
-    st.caption(idea["one_liner"])
-    with st.expander("Show initial assumptions", expanded=False):
-        for a in idea["assumptions"]:
-            st.markdown(f"- {a['text']}  _({a['type']})_")
-    st.button("Choose", key="pick_home", on_click=lambda: set_idea("home_comfort"), type="primary")
+    cols = st.columns(3)
+
+    def idea_card(key: str, col):
+        idea = IDEAS[key]
+        with col:
+            st.markdown(f"### {idea['title']}")
+            st.caption(idea["one_liner"])
+            with st.expander("Show initial assumptions", expanded=False):
+                for a in idea["assumptions"]:
+                    st.markdown(f"- {a['text']}  _({a['type']})_")
+            st.button("Choose", key=f"pick_{key}", on_click=lambda k=key: set_idea(k), type="primary", use_container_width=True)
+
+    idea_card("home_comfort", cols[0])
+    idea_card("landlord_energy", cols[1])
+    idea_card("installer_tools", cols[2])
 
 def screen_rank():
     stepper()
@@ -431,11 +503,11 @@ def screen_rank():
 def screen_round_select(round_idx: int):
     stepper()
     st.subheader(f"Round {round_idx} — Select your experiments")
-    st.caption("Schedule as many tests as your **total token budget** allows. Parallel within a round; time = longest test.")
+    st.caption("Be intentional — keep tokens for later rounds. Within a round, tests run in parallel; time = the longest test.")
 
     # tokens (pool)
     remaining = pool_remaining()
-    to_badge(f"Total token budget: {st.session_state.tokens_total}", "#295")
+    to_badge(f"Total token budget (all rounds): {st.session_state.tokens_total}", "#295")
     st.write(" ")
     to_badge(f"Remaining now: {remaining}", "#295")
 
@@ -445,11 +517,11 @@ def screen_round_select(round_idx: int):
     for a in ranked:
         with st.expander(f"{a['id']} — {a['text']}", expanded=False):
             st.caption(f"Type: **{a['type']}**")
-            cols = st.columns(3)
+            cols = st.columns(4)
             keys = list(EXPERIMENTS.keys())
             for i, ek in enumerate(keys):
                 card = EXPERIMENTS[ek]
-                with cols[i % 3]:
+                with cols[i % 4]:
                     st.markdown(
                         f"**{card['label']}**  \n_{card['desc']}_  \nCost: **{card['cost']}**, Duration: **{card['days']}d**"
                     )
@@ -519,6 +591,17 @@ def screen_round_results(round_idx: int):
         st.button("Next Round — Select", type="primary", on_click=lambda r=round_idx + 1: next_stage(f"r{r}_select"))
     else:
         st.button("See Learning Summary & Score", type="primary", on_click=lambda: next_stage("score"))
+
+# --------------------------------------------------------------------------------------
+# Visualization
+# --------------------------------------------------------------------------------------
+def show_validation_chart():
+    prog = st.session_state.validation_progress
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.bar(prog.keys(), prog.values(), color=["#4CAF50", "#2196F3", "#FFC107"])
+    ax.set_ylabel("Validated Assumptions")
+    ax.set_title("Cumulative Validation Progress")
+    st.pyplot(fig)
 
 # --------------------------------------------------------------------------------------
 # Scoring & Feedback screen
