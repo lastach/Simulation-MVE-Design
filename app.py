@@ -1,4 +1,4 @@
-# LaunchX MVE Simulation 2 - Updated 2026-04-10
+import html
 import math
 import random
 from typing import Dict, List, Tuple
@@ -391,7 +391,24 @@ def to_badge(txt: str, color: str = "#666"):
     )
 
 
+_STEP_STAGES = [
+    "intro", "choose", "rank",
+    "r1_select", "r1_results",
+    "r2_select", "r2_results",
+    "r3_select", "r3_results",
+    "score",
+]
+
+def _track_max_stage():
+    """Track the furthest stage the student has reached so they can navigate back."""
+    if "max_stage_idx" not in st.session_state:
+        st.session_state.max_stage_idx = 0
+    current = _STEP_STAGES.index(st.session_state.stage) if st.session_state.stage in _STEP_STAGES else 0
+    st.session_state.max_stage_idx = max(st.session_state.max_stage_idx, current)
+
+
 def stepper():
+    _track_max_stage()
     cols = st.columns(10)
     steps = [
         "Intro",
@@ -418,21 +435,26 @@ def stepper():
         "score": 9,
     }
     active_idx = idx_map.get(st.session_state.stage, 0)
+    max_idx = st.session_state.get("max_stage_idx", active_idx)
     for i, c in enumerate(cols):
         with c:
-            style = (
-                "background:#eef6ff;border:1px solid #cde;"
-                if i == active_idx
-                else "background:#f7f7f9;border:1px solid #eee;"
-            )
-            st.markdown(
-                f"""
-                <div style="{style}padding:8px 10px;border-radius:10px;text-align:center;min-height:56px">
-                {steps[i]}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if i == active_idx:
+                style = "background:#eef6ff;border:1px solid #cde;"
+            elif i <= max_idx:
+                style = "background:#f0f0f5;border:1px solid #ccc;cursor:pointer;"
+            else:
+                style = "background:#f7f7f9;border:1px solid #eee;opacity:0.5;"
+            if i <= max_idx and i != active_idx:
+                st.button(steps[i], key=f"step_nav_{i}", on_click=next_stage, args=(_STEP_STAGES[i],), use_container_width=True)
+            else:
+                st.markdown(
+                    f"""
+                    <div style="{style}padding:8px 10px;border-radius:10px;text-align:center;min-height:56px">
+                    {steps[i]}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 # --------------------------------------------------------------------------------------
@@ -1016,7 +1038,8 @@ def screen_rank():
         with cols[1]:
             st.button("▼", key=f"dn_{i}", on_click=lambda idx=i: move_item(idx, +1))
         with cols[2]:
-            to_badge(a["type"], "#3a7")
+            _cat_colors = {"desirability": "#e07b39", "feasibility": "#2b7a78", "viability": "#5b4a9e"}
+            to_badge(a["type"], _cat_colors.get(a["type"], "#666"))
             st.markdown(f"**{a['id']}**: {a['text']}")
 
     st.divider()
@@ -1064,7 +1087,10 @@ def screen_round_select(round_idx: int):
             f"Make them count. What is the one question that, if answered, would change everything?"
         )
 
-    st.caption("Be intentional: keep tokens for later rounds.")
+    if round_idx < 3:
+        st.caption("Be intentional: keep tokens for later rounds.")
+    else:
+        st.caption("Final round: use your remaining tokens wisely.")
 
     # Tokens (pool)
     remaining = pool_remaining()
@@ -1220,7 +1246,7 @@ def screen_round_results(round_idx: int):
             # Header with assumption + signal badge
             header_html = f'''
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                <div><strong>{a['id']}</strong>: {a['text']}</div>
+                <div><strong>{html.escape(a['id'])}</strong>: {html.escape(a['text'])}</div>
                 <span style="padding: 4px 12px; border-radius: 20px; background: {border_color}; color: white; font-size: 0.8rem; white-space: nowrap;">{signal_icon} {signal_label}</span>
             </div>
             '''
