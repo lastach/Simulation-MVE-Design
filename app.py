@@ -983,23 +983,36 @@ def screen_choose():
 
     st.subheader("Choose Your Direction")
     st.markdown(
-        "The ThermaLoop team has identified three possible products. Each one targets a different customer, "
-        "solves a different version of the problem, and carries its own risks. **There is no 'right' choice.** "
-        "What matters is what you do after you choose."
+        "The ThermaLoop team has three possible products. Each targets a different customer. "
+        "**There is no right choice.** What matters is what you do after you choose."
     )
 
     cols = st.columns(3)
 
+    _idea_colors = {
+        "home_comfort": "#6366f1",
+        "landlord_energy": "#2b7a78",
+        "installer_tools": "#e07b39",
+    }
+
     def idea_card(key: str, col):
         idea = IDEAS[key]
+        color = _idea_colors.get(key, "#6366f1")
+        n_assumptions = len(idea["assumptions"])
         with col:
-            st.markdown(f"### {idea['title']}")
-            st.markdown(f"*{idea['one_liner']}*")
-            st.markdown(f"**Target customer:** {idea['customer']}")
-            st.markdown(f"**Why this is exciting:** {idea['why_exciting']}")
-            with st.expander(f"Preview assumptions ({len(idea['assumptions'])})", expanded=False):
-                for a in idea["assumptions"]:
-                    st.markdown(f"- {a['text']} _({a['type']})_")
+            card_html = f'''
+            <div style="border: 2px solid {color}; border-radius: 10px; overflow: hidden; margin-bottom: 1rem;">
+                <div style="background: {color}; color: white; padding: 0.75rem 1rem;">
+                    <div style="font-size: 1.15rem; font-weight: 700;">{idea['title']}</div>
+                </div>
+                <div style="padding: 1rem;">
+                    <div style="font-size: 0.95rem; margin-bottom: 0.75rem;">{idea['one_liner']}</div>
+                    <div style="font-size: 0.85rem; color: #555;"><strong>Customer:</strong> {idea['customer']}</div>
+                    <div style="font-size: 0.85rem; color: #555; margin-top: 0.25rem;">{n_assumptions} assumptions to test</div>
+                </div>
+            </div>
+            '''
+            st.markdown(card_html, unsafe_allow_html=True)
             st.button(
                 f"Build {idea['title']}",
                 key=f"pick_{key}",
