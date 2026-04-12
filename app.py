@@ -10,7 +10,7 @@ import streamlit as st
 # Page setup
 # --------------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="LaunchX: Designing & Running Early Experiments",
+    page_title="Designing & Running Early Experiments",
     page_icon="🧪",
     layout="wide",
 )
@@ -413,7 +413,7 @@ def stepper():
     steps = [
         "Intro",
         "Choose Idea",
-        "Rank Risks",
+        "Threat Radar",
         "Round 1: Select",
         "Round 1: Results",
         "Round 2: Select",
@@ -937,7 +937,7 @@ def screen_intro():
     hero_html = '''
     <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 3rem; border-radius: 12px; color: white; text-align: center; margin-bottom: 2rem;">
         <h1 style="margin: 0 0 0.5rem 0; font-size: 2.5rem;">Designing & Running Early Experiments</h1>
-        <p style="margin: 0; font-size: 1.2rem; opacity: 0.95;">Simulation #2: ThermaLoop</p>
+        <p style="margin: 0; font-size: 1.2rem; opacity: 0.95;">ThermaLoop</p>
     </div>
     '''
     st.markdown(hero_html, unsafe_allow_html=True)
@@ -974,7 +974,7 @@ def screen_intro():
         st.button("I'm Ready. Let's Go.", type="primary", on_click=lambda: next_stage("choose"), use_container_width=True)
     st.caption("Takes about 15 minutes. There are no right answers, only strategic tradeoffs.")
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
@@ -1025,7 +1025,7 @@ def screen_choose():
     idea_card("landlord_energy", cols[1])
     idea_card("installer_tools", cols[2])
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
@@ -1062,7 +1062,7 @@ def screen_rank():
         on_click=lambda: next_stage("r1_select"),
     )
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
@@ -1179,7 +1179,7 @@ def screen_round_select(round_idx: int):
     else:
         st.button(f"Run Round {round_idx}", disabled=True)
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
@@ -1294,7 +1294,7 @@ def screen_round_results(round_idx: int):
             on_click=lambda: next_stage("score"),
         )
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
@@ -1437,10 +1437,10 @@ def screen_score():
         <h3 style="margin-top: 0;">You just practiced the hardest part of being a founder.</h3>
         <p style="margin: 1rem 0; font-size: 1.05rem;">
             Knowing what to test, how to test it, and how to read the results is what separates founders who
-            learn fast from those who burn through their runway guessing. LaunchX programs are built around
+            learn fast from those who burn through their runway guessing. These simulations are built around
             exactly these skills.
         </p>
-        <a href="https://launchx.com/programs" target="_blank" style="display: inline-block; margin-top: 1rem; padding: 0.75rem 1.5rem; background: white; color: #6366f1; text-decoration: none; border-radius: 6px; font-weight: bold;">Explore LaunchX Programs</a>
+        <a href="#" target="_blank" style="display: inline-block; margin-top: 1rem; padding: 0.75rem 1.5rem; background: white; color: #6366f1; text-decoration: none; border-radius: 6px; font-weight: bold;">Explore More Simulations</a>
     </div>
     '''
     st.markdown(cta_card, unsafe_allow_html=True)
@@ -1451,7 +1451,7 @@ def screen_score():
     with col2:
         st.button("Play Again", on_click=lambda: next_stage("intro"), use_container_width=True)
 
-    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;">Brought to you by LaunchX</div>'
+    footer_html = '<div style="text-align: center; color: #888; font-size: 13px; margin-top: 2rem;"></div>'
     st.markdown(footer_html, unsafe_allow_html=True)
 
 
