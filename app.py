@@ -590,24 +590,69 @@ def build_narrative(idea_key: str, exp_key: str, success: bool, signal: str, qua
 # --------------------------------------------------------------------------------------
 # Simulation engine
 # --------------------------------------------------------------------------------------
-def simulate_result(aid: str, ek: str, rng: random.Random) -> dict:
-    """Simulate a single test result, including quant, time, and cost."""
+def simulate_result(aid: str, ek: str, rng: random.Random, round_idx: int = 1) -> dict:
+    """Simulate a single test result, including quant, time, and cost.
+
+    Real experimentation compounds: prior learning about an assumption makes
+    later tests more informative, but only when the follow-up is designed to
+    extend knowledge, not re-litigate it. We model three effects:
+
+      1) Iterative-design boost — if an earlier round tested this same
+         assumption with a DIFFERENT experiment type, the current test gets
+         +10% success (learning compounds across methods).
+      2) Redundancy penalty — if a prior round already ran the SAME
+         experiment on the SAME assumption, we take -15% success and force
+         a weak signal at best (you already asked this question).
+      3) Disproven-assumption penalty — if a prior round returned a strong
+         NEGATIVE (no-signal) on this assumption with a fit-matched test,
+         later tests get -5% success to reflect stale belief bias.
+    """
     a = get_assumption(aid)
     e = EXPERIMENTS[ek]
     risk = st.session_state.ground_truth.get(aid, 2)  # 1..3
     fit = 1 if a["type"] in e["fit"] else 0
 
-    # Raised base success chance + stronger fit boost, capped at 0.95
+    # Base success chance + fit boost, capped at 0.95
     base_success = {3: 0.35, 2: 0.55, 1: 0.75}[risk]
     p = base_success + 0.25 * fit
-    p = min(p, 0.95)
+
+    # --- Sequential-learning carryover -----------------------------------
+    iterative_boost = 0.0
+    redundant = False
+    prior_no_signal_fit = False
+    prior_results = []
+    for r_idx in range(1, round_idx):
+        prior_results.extend(st.session_state.results.get(r_idx, []))
+    for pr in prior_results:
+        if pr["aid"] != aid:
+            continue
+        if pr["experiment"] == ek:
+            redundant = True
+        elif pr.get("success"):
+            # different experiment, prior success → learning compounds
+            iterative_boost = max(iterative_boost, 0.10)
+        if (not pr.get("success")) and pr.get("fit", 0) == 1:
+            prior_no_signal_fit = True
+
+    if redundant:
+        p -= 0.15
+    if iterative_boost:
+        p += iterative_boost
+    if prior_no_signal_fit and not redundant:
+        p -= 0.05
+    p = max(0.05, min(p, 0.95))
     success = rng.random() < p
 
-    # Signal: fit tends to strong
+    # Signal: fit tends to strong; redundancy caps at weak even on success
     if not success:
         signal = "no-signal"
+    elif redundant:
+        signal = "weak"  # re-running same test on same assumption adds little
     else:
-        signal = "strong" if (fit and rng.random() < 0.8) else "weak"
+        strong_p = 0.8 if fit else 0.25
+        if iterative_boost:
+            strong_p = min(0.95, strong_p + 0.10)
+        signal = "strong" if rng.random() < strong_p else "weak"
 
     quant_data = quant_for_experiment(ek, rng)
     narrative = build_narrative(st.session_state.idea_key, ek, success, signal, quant_data)
@@ -623,6 +668,8 @@ def simulate_result(aid: str, ek: str, rng: random.Random) -> dict:
         days=e["days"],
         assumption_type=a["type"],
         fit=fit,
+        iterative_boost=iterative_boost,
+        redundant=redundant,
     )
 
 
@@ -631,7 +678,7 @@ def run_round(round_idx: int):
     rng = random.Random(100 + round_idx)  # stable-ish per round
     results = []
     for (aid, ek) in st.session_state.portfolio[round_idx]:
-        r = simulate_result(aid, ek, rng)
+        r = simulate_result(aid, ek, rng, round_idx=round_idx)
         results.append(r)
         st.session_state.tokens_spent += EXPERIMENTS[ek]["cost"]
         if r["success"]:
@@ -827,6 +874,26 @@ def generate_personalized_coaching(breakdown, total_score):
             f"**Spending pattern:** You saved most of your budget for Round 3 ({round_costs[3]} of {total_spent} tokens). "
             f"Patience can be strategic, but under-testing early means you had less signal to guide your later experiments. "
             f"A more balanced split (like 40/30/30) often produces better compounding learning."
+        )
+
+    # ---- Sequential learning analysis ----
+    all_results = [r for rnd in (1, 2, 3) for r in st.session_state.results[rnd]]
+    redundant_tests = [r for r in all_results if r.get("redundant")]
+    iterative_wins = [r for r in all_results if r.get("iterative_boost", 0) > 0]
+    if redundant_tests:
+        notes.append(
+            f"**Sequencing — redundancy:** {len(redundant_tests)} of your later-round tests "
+            f"re-ran the same experiment on an assumption you'd already tested. That's spending "
+            f"tokens on a question you've already asked. Later rounds are where you compound "
+            f"learning — use a DIFFERENT experiment type to either validate from another angle "
+            f"or unlock the next-layer question."
+        )
+    if iterative_wins:
+        notes.append(
+            f"**Sequencing — iterative design:** {len(iterative_wins)} of your tests built on "
+            f"prior-round findings with a complementary experiment type. That's exactly how "
+            f"rigorous experimentation compounds — each round extends the last instead of "
+            f"repeating it."
         )
 
     # ---- Analyze experiment type diversity ----
