@@ -1222,8 +1222,18 @@ def screen_round_select(round_idx: int):
             for i, ek in enumerate(keys):
                 card = EXPERIMENTS[ek]
                 with cols[i % 4]:
+                    # Experiment-fit signal at scheduling time (Ries / Maurya: pair the
+                    # assumption type to the experiment that can actually falsify it)
+                    fit_ok = a["type"] in card.get("fit", [])
+                    fit_badge = "Good fit" if fit_ok else "Weak fit"
+                    fit_color = "#22c55e" if fit_ok else "#ef4444"
                     st.markdown(
                         f"**{card['label']}** \n_{card['desc']}_ \nCost: **{card['cost']}**, Duration: **{card['days']}d**"
+                    )
+                    st.markdown(
+                        f"<span style='color:{fit_color};font-size:12px;font-weight:600;'>"
+                        f"• {fit_badge} for {a['type']} assumptions</span>",
+                        unsafe_allow_html=True,
                     )
                     # Check if this exact test is already scheduled for this assumption in this round
                     already_scheduled = any(
@@ -1234,6 +1244,14 @@ def screen_round_select(round_idx: int):
                         st.success("Added")
                     else:
                         if st.button(f"Add to {a['id']}", key=f"add_{round_idx}_{a['id']}_{ek}"):
+                            # Warn if scheduling a poorly-fit experiment (allow, but coach)
+                            if not fit_ok:
+                                st.warning(
+                                    f"You're scheduling a **{card['label']}** for a **{a['type']}** assumption. "
+                                    f"This test is designed for {', '.join(card.get('fit', ['—']))} assumptions. "
+                                    f"It will still run, but expect weaker signal. (Ries: *validated learning* "
+                                    f"requires the experiment to be capable of falsifying the assumption.)"
+                                )
                             # enforce strict 30-token cap including scheduled-but-not-run tests
                             if planned_spend() + card["cost"] <= st.session_state.tokens_total:
                                 st.session_state.portfolio[round_idx].append((a["id"], ek))
@@ -1367,6 +1385,33 @@ def screen_round_results(round_idx: int):
 
             # The narrative: the heart of the upgrade
             st.markdown(r["narrative"])
+
+    # Round-adaptive Ries coaching: teach the *concept* being exercised in this round
+    st.divider()
+    st.markdown("#### Coaching for this round")
+    ries_coaching = {
+        1: (
+            "**Build–Measure–Learn, Round 1 (Ries, *The Lean Startup*, Ch. 5).** "
+            "Round 1 is about the *riskiest* assumption — the one that, if false, kills the venture. "
+            "Notice the signals above: strong signals on low-risk assumptions are cheap information. "
+            "No signal on the top-ranked risk is the most valuable result you can buy — it tells you "
+            "where to pivot before spending Round 2 tokens."
+        ),
+        2: (
+            "**Validated learning, Round 2 (Ries, 2011; Maurya, *Running Lean*, 2012).** "
+            "Round 2 should compound on Round 1. If Round 1 produced strong signal, Round 2 tests "
+            "*adjacent* risks (the 'now that X is true, is Y?' chain). If Round 1 was no-signal, "
+            "Round 2 is your pivot opportunity — re-test the same assumption with a *different* "
+            "experiment type, not more of the same."
+        ),
+        3: (
+            "**Persevere or pivot, Round 3 (Ries, 2011, Ch. 8).** "
+            "Round 3 is your commitment round. With your cumulative evidence below, ask: "
+            "do I have *enough signal on the right assumptions* to justify building? If 2+ "
+            "top-ranked risks are still un-validated, you are pattern-matching, not reasoning."
+        ),
+    }
+    st.markdown(ries_coaching.get(round_idx, ""))
 
     # Cumulative validation progress (table)
     st.divider()
