@@ -348,6 +348,7 @@ def set_idea(key: str):
     random.shuffle(shuffled)       # randomize initial order so learner must reorder
     st.session_state.assumptions = shuffled
     st.session_state.ranked = shuffled.copy()
+    st.session_state.dropped_ids = set()  # assumptions the founder explicitly chose not to test
     st.session_state.ground_truth = idea["truth"].copy()
     st.session_state.round = 1
     st.session_state.tokens_spent = 0
@@ -355,6 +356,29 @@ def set_idea(key: str):
     st.session_state.results = {1: [], 2: [], 3: []}
     st.session_state.validation_progress = {"desirability": 0, "feasibility": 0, "viability": 0}
     next_stage("rank")
+
+
+def drop_assumption(aid: str):
+    """Mark an assumption as dropped (will not be tested)."""
+    if "dropped_ids" not in st.session_state:
+        st.session_state.dropped_ids = set()
+    # Enforce minimum 4 active assumptions to keep gameplay meaningful
+    active_count = sum(1 for a in st.session_state.ranked if a["id"] not in st.session_state.dropped_ids)
+    if active_count <= 4:
+        return False
+    st.session_state.dropped_ids.add(aid)
+    return True
+
+
+def restore_assumption(aid: str):
+    if "dropped_ids" in st.session_state:
+        st.session_state.dropped_ids.discard(aid)
+
+
+def active_ranked():
+    """Return ranked assumptions excluding any the founder dropped."""
+    dropped = st.session_state.get("dropped_ids", set())
+    return [a for a in st.session_state.ranked if a["id"] not in dropped]
 
 
 def get_assumption(aid: str) -> dict:
@@ -369,6 +393,25 @@ def move_item(idx: int, direction: int):
     new_idx = idx + direction
     if 0 <= new_idx < len(items):
         items[idx], items[new_idx] = items[new_idx], items[idx]
+
+
+def move_active(aid: str, direction: int):
+    """Move an assumption up/down within the active (non-dropped) order.
+
+    Skips over any dropped items in between so up/down behave intuitively when
+    some assumptions are hidden.
+    """
+    items = st.session_state.ranked
+    dropped = st.session_state.get("dropped_ids", set())
+    cur_idx = next((i for i, a in enumerate(items) if a["id"] == aid), None)
+    if cur_idx is None:
+        return
+    step = 1 if direction > 0 else -1
+    target = cur_idx + step
+    while 0 <= target < len(items) and items[target]["id"] in dropped:
+        target += step
+    if 0 <= target < len(items):
+        items[cur_idx], items[target] = items[target], items[cur_idx]
 
 
 def planned_spend() -> int:
@@ -635,11 +678,14 @@ def risk_prioritization_score() -> Tuple[int, float, float, dict]:
       weight = 2.0 if i<=3; 1.5 if 4<=i<=6; 1.0 if i>=7
     - Category score (0-25) = 25 * (achieved_points / max_points)
     """
-    ranked_ids = [a["id"] for a in st.session_state.ranked]
+    # Score only the assumptions the founder kept active (dropped ones are excluded)
+    ranked_ids = [a["id"] for a in active_ranked()]
     truth = st.session_state.ground_truth
 
-    # Build ground-truth ranking (1..N), tie-broken stably by ID
-    truth_sorted = sorted(truth.items(), key=lambda kv: (-kv[1], kv[0]))
+    # Build ground-truth ranking (1..N), tie-broken stably by ID,
+    # restricted to the active (non-dropped) set so positions are 1..len(active)
+    truth_sorted_full = sorted(truth.items(), key=lambda kv: (-kv[1], kv[0]))
+    truth_sorted = [(aid, r) for (aid, r) in truth_sorted_full if aid in set(ranked_ids)]
     truth_rank = {aid: idx + 1 for idx, (aid, _) in enumerate(truth_sorted)}
 
     N = len(ranked_ids)
@@ -701,16 +747,27 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str], List[str], Lis
     # Learning Outcome (0-15): strong=2, weak=1 (cap 15)
     learn = min(15, learning_points)
 
-    # Assumption Quality (0-10): diversity among top 5
-    ranked_ids = [a["id"] for a in st.session_state.ranked]
+    # Assumption Quality (0-10): diversity among top 5 + bonus for strategic dropouts
+    ranked_ids = [a["id"] for a in active_ranked()]
     diversity = len(set(get_assumption(aid)["type"] for aid in ranked_ids[:5]))
-    qual = 6 + (4 if diversity >= 2 else 0)
+    qual = 4 + (3 if diversity >= 2 else 0)
+    # Strategic dropout bonus: +1 for each truly low-risk assumption (truth==1) the founder dropped, max +3
+    dropped = st.session_state.get("dropped_ids", set())
+    truth = st.session_state.ground_truth
+    smart_drops = sum(1 for aid in dropped if truth.get(aid, 0) == 1)
+    bad_drops = sum(1 for aid in dropped if truth.get(aid, 0) >= 3)
+    qual += min(3, smart_drops)
+    qual = max(0, qual - bad_drops)  # penalize dropping high-risk assumptions
+    qual = max(0, min(10, qual))
 
     total_score = min(100, risk_prior + exp_fit + eff + learn + qual)
 
     # Reasons (aligned one-to-one with categories)
+    drop_note = ""
+    if dropped:
+        drop_note = f" Strategic dropouts: {smart_drops} smart (low-risk), {bad_drops} risky (high-risk)."
     reasons = {
-        "Assumption Quality": f"Top 5 include {diversity} distinct risk types.",
+        "Assumption Quality": f"Top 5 include {diversity} distinct risk types.{drop_note}",
         "Risk Prioritization": (
             f"Full-order match score: {rp_achieved:.1f}/{rp_max:.1f} "
             f"(exact={rp_details['exact_matches']}, +/-1={rp_details['within_one']}, +/-2={rp_details['within_two']})."
@@ -724,8 +781,12 @@ def compute_score() -> Tuple[int, Dict[str, int], Dict[str, str], List[str], Lis
                             f"(target={TARGET_LEARNING_POINTS}).",
     }
 
-    # For details table, show top 3 user picks and ground-truth top 3 (by text)
-    truth_sorted = sorted(st.session_state.ground_truth.items(), key=lambda kv: (-kv[1], kv[0]))
+    # For details table, show top 3 user picks and ground-truth top 3 from the active set
+    active_ids = set(ranked_ids)
+    truth_sorted = sorted(
+        ((aid, r) for aid, r in st.session_state.ground_truth.items() if aid in active_ids),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
     true_top3 = [aid for aid, _ in truth_sorted[:3]]
     user_top3 = ranked_ids[:3]
 
@@ -1036,24 +1097,62 @@ def screen_rank():
 
     st.markdown(
         f"Here are the key assumptions behind **{idea.get('title', 'your idea')}**. "
-        f"Your job: drag them into order from **riskiest at the top** to **least risky at the bottom**."
+        f"Your job: rank them from **riskiest at the top** to **least risky at the bottom** — "
+        f"and drop any you decide are not worth testing this round."
     )
     st.caption(
         "Think about it this way: if this assumption turns out to be wrong, does the whole idea collapse? "
-        "Those go at the top. Assumptions that are uncertain but survivable go lower."
+        "Those go at the top. Assumptions you're confident enough about — or that simply don't matter "
+        "for the next 90 days — can be dropped so you focus your tests where they count."
     )
 
+    if "dropped_ids" not in st.session_state:
+        st.session_state.dropped_ids = set()
+
     items = st.session_state.ranked
+    active_items = [a for a in items if a["id"] not in st.session_state.dropped_ids]
+    dropped_items = [a for a in items if a["id"] in st.session_state.dropped_ids]
+    can_drop_more = len(active_items) > 4
+
+    st.markdown(f"##### Active assumptions ({len(active_items)} of {len(items)})")
+    if not can_drop_more:
+        st.caption("Minimum of 4 active assumptions reached — restore one to drop a different one.")
+
     for i, a in enumerate(items):
-        cols = st.columns([0.06, 0.06, 0.88])
+        if a["id"] in st.session_state.dropped_ids:
+            continue
+        cols = st.columns([0.06, 0.06, 0.78, 0.10])
         with cols[0]:
-            st.button("▲", key=f"up_{i}", on_click=lambda idx=i: move_item(idx, -1))
+            st.button("▲", key=f"up_{a['id']}", on_click=lambda aid=a["id"]: move_active(aid, -1))
         with cols[1]:
-            st.button("▼", key=f"dn_{i}", on_click=lambda idx=i: move_item(idx, +1))
+            st.button("▼", key=f"dn_{a['id']}", on_click=lambda aid=a["id"]: move_active(aid, +1))
         with cols[2]:
             _cat_colors = {"desirability": "#e07b39", "feasibility": "#2b7a78", "viability": "#5b4a9e"}
             to_badge(a["type"], _cat_colors.get(a["type"], "#666"))
             st.markdown(f"**{a['id']}**: {a['text']}")
+        with cols[3]:
+            st.button(
+                "Drop",
+                key=f"drop_{a['id']}",
+                disabled=not can_drop_more,
+                help="Decide not to test this assumption. You can always restore it.",
+                on_click=lambda aid=a["id"]: drop_assumption(aid),
+            )
+
+    if dropped_items:
+        with st.expander(f"Dropped ({len(dropped_items)}) — won't be tested", expanded=False):
+            for a in dropped_items:
+                cols = st.columns([0.85, 0.15])
+                with cols[0]:
+                    _cat_colors = {"desirability": "#e07b39", "feasibility": "#2b7a78", "viability": "#5b4a9e"}
+                    to_badge(a["type"], _cat_colors.get(a["type"], "#666"))
+                    st.markdown(f"**{a['id']}**: {a['text']}")
+                with cols[1]:
+                    st.button(
+                        "Restore",
+                        key=f"restore_{a['id']}",
+                        on_click=lambda aid=a["id"]: restore_assumption(aid),
+                    )
 
     st.divider()
     st.button(
@@ -1111,8 +1210,8 @@ def screen_round_select(round_idx: int):
     st.write(" ")
     to_badge(f"Tokens left: {remaining} of {st.session_state.tokens_total}", "#295")
 
-    # Show ranked list with selector of experiments
-    ranked = st.session_state.ranked
+    # Show ranked list with selector of experiments (excluding any dropped)
+    ranked = active_ranked()
     st.markdown("##### Assumptions (your order)")
 
     for a in ranked:
@@ -1313,7 +1412,7 @@ def screen_score():
     score_color = "#16a34a" if total >= 70 else "#d97706" if total >= 50 else "#dc2626"
     score_html = f'''
     <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 2.5rem; border-radius: 12px; color: white; text-align: center; margin-bottom: 2rem;">
-        <p style="margin: 0; font-size: 1rem; opacity: 0.8;">Your Founder Readiness Score</p>
+        <p style="margin: 0; font-size: 1rem; opacity: 0.8;">Your Experiment Design Score</p>
         <h1 style="margin: 0.5rem 0; font-size: 4rem; color: {score_color};">{total}<span style="font-size: 1.5rem; opacity: 0.6;">/100</span></h1>
         <p style="margin: 0; font-size: 1.4rem;">{letter}: {label}</p>
         <p style="margin: 0.5rem 0 0 0; font-size: 0.95rem; opacity: 0.7;">{percentile_desc} of simulation players</p>
